@@ -4,7 +4,10 @@ import { Libinit } from "@/lib/signal/signal"
 import { useEffect } from "react"
 
 export default function LoginPage() {
-
+  useEffect(()=>{
+    Libinit()
+    // connectSocket()
+  },[])
   return (
     <div className="flex min-h-svh flex-col items-center justify-center gap-6 bg-background p-3 md:p-10 border">
       <div className="w-full max-w-sm">

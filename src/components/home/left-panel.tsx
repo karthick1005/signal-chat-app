@@ -1,22 +1,18 @@
-"use client"
-import { ListFilter, Search } from "lucide-react"
-import { Input } from "../ui/input"
-import ThemeSwitch from "./theme-switch"
-import Conversation from "./conversation"
+"use client";
+import { ListFilter, Search } from "lucide-react";
+import { Input } from "../ui/input";
+import ThemeSwitch from "./theme-switch";
+import Conversation from "./conversation";
 
-// import UserListDialog from "./user-list-dialog"
+import UserListDialog from "./user-list-dialog";
 
-import { useContext, useEffect, useState } from "react"
-import { useConversationStore } from "@/store/chat-store"
-import ChatStore from "@/lib/signal/ChatStore"
-import { SocketContext } from "@/hooks/socket"
-import { SocketInterface } from "@/lib/types"
-import chatStoreInstance from "@/lib/chatStoreInstance"
+import {  useEffect, useState } from "react";
+import { useConversationStore } from "@/store/chat-store";
+import chatStoreInstance from "@/lib/chatStoreInstance";
 const LeftPanel = () => {
-      const [conversations,setconverstations]=useState<any[]>([])
-          const {socket,handlemessage} =useContext<SocketInterface|null>(SocketContext) || {}
-
-          useEffect(() => {
+  const { chats } = useConversationStore();
+  const [conversations, setconverstations] = useState<any[]>([]);
+useEffect(() => {
       const fetchChats = async () => {
       const allchats=await chatStoreInstance.getAllChats()
     
@@ -24,24 +20,26 @@ const LeftPanel = () => {
       console.log("this is get all chats",allchats,Date.now())
       }
       fetchChats()
-    },[handlemessage])
-  const { selectedChat, setSelectedChat } =
-    useConversationStore()
+    },[])
+  useEffect(() => {
+    setconverstations(chats);
+  }, [chats]);
+  const { selectedChat, setSelectedChat } = useConversationStore();
 
   useEffect(() => {
     const conversationIds = conversations?.map(
       (conversation) => conversation._id
-    )
+    );
     if (
       selectedChat &&
       conversationIds &&
       !conversationIds.includes(selectedChat._id)
     ) {
-      setSelectedChat(null)
+      setSelectedChat(null);
     }
-  }, [conversations, selectedChat, setSelectedChat])
+  }, [conversations, selectedChat, setSelectedChat]);
 
-//   if (isLoading) return null
+  //   if (isLoading) return null
 
   return (
     <div className="w-1/4 border-gray-600 border-r">
@@ -51,7 +49,7 @@ const LeftPanel = () => {
           {/* <UserButton /> */}
 
           <div className="flex items-center gap-3">
-            {/* {false && <UserListDialog />} */}
+            <UserListDialog />
             <ThemeSwitch />
           </div>
         </div>
@@ -92,6 +90,6 @@ const LeftPanel = () => {
         )}
       </div>
     </div>
-  )
-}
-export default LeftPanel
+  );
+};
+export default LeftPanel;

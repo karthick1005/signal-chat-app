@@ -52,6 +52,7 @@ export  const SessionCreation=async (userId) => {
     const reciepentid=await createSession(data as never)
    
    await chatStoreInstance.saveRegistrationId(data.userId,reciepentid)
+   await chatStoreInstance.addChatMeta(userId,data?.username,data?.avatar)
     }
 export const updatePreKeys = async (userId: string, preKeys: any[]) => {
   const url = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";

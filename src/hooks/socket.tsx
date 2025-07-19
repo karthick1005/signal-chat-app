@@ -29,7 +29,7 @@ const SocketProvider: React.FC<{ children: React.ReactNode }> = ({
 
     console.log("🛜 Connecting to WebSocket...");
 
-    const newSocket = io("ws://localhost:8000", {
+    const newSocket = io(process.env.NEXT_PUBLIC_WS || "ws://localhost:8000", {
       path: "/websocket",
       withCredentials: false,
       reconnection: true,

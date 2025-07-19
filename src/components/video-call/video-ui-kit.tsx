@@ -45,9 +45,30 @@ export default function VideoCall({
   useEffect(() => {
     let cancelled = false;
 
+    // const pc = new RTCPeerConnection({
+    //   iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+    // });
     const pc = new RTCPeerConnection({
-      iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
-    });
+      iceTransportPolicy: "relay",
+  iceServers: [
+    {
+      urls: ["stun:bn-turn1.xirsys.com"],
+    },
+    {
+      username:
+        "YFCalDue4n-9pGShTlLhyvOkge3ZhnfaOeQNCoFoAwxfLYfAizGmjFxmRr3zigJwAAAAAGh7wUZrYXJ0aGljazEwMDU=",
+      credential: "96991cda-64b9-11f0-9dd1-0242ac140004",
+      urls: [
+        "turn:bn-turn1.xirsys.com:80?transport=udp",
+        "turn:bn-turn1.xirsys.com:3478?transport=udp",
+        "turn:bn-turn1.xirsys.com:80?transport=tcp",
+        "turn:bn-turn1.xirsys.com:3478?transport=tcp",
+        "turns:bn-turn1.xirsys.com:443?transport=tcp",
+        "turns:bn-turn1.xirsys.com:5349?transport=tcp",
+      ],
+    },
+  ],
+});
 
     pcRef.current = pc;
     onPeerConnection(pc);

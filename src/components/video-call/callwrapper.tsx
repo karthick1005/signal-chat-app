@@ -5,51 +5,43 @@ import { HandleSendMessage } from "@/lib/utils";
 import { useConversationStore } from "@/store/chat-store";
 import { decryptMessage } from "@/lib/signal/signal";
 import chatStoreInstance from "@/lib/chatStoreInstance";
+import { Phone, PhoneOff } from "lucide-react";
 
-export default function CallWrapper({ userId, callId, onCallEnd,startcall=false,stopcall }: any) {
+export default function CallWrapper({ userId }: { userId: string }) {
   const { socket } = useContext(SocketContext) || {};
-  const { selectedChat } = useConversationStore();
+  const { selectedChat, setSelectedChat } = useConversationStore();
 
   const [remoteSDP, setRemoteSDP] = useState<RTCSessionDescriptionInit>();
   const [isCaller, setIsCaller] = useState(false);
-  const [startCallUI, setStartCallUI] = useState(false);
+  const [callVisible, setCallVisible] = useState(false);
+  const [incomingCall, setIncomingCall] = useState<any | null>(null);
+  const [incomingChatInfo, setIncomingChatInfo] = useState<any | null>(null);
   const [peerId, setPeerId] = useState("");
+  const [callId, setCallId] = useState("");
 
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const iceCandidateQueue = useRef<RTCIceCandidateInit[]>([]);
   const addedCandidates = useRef<Set<string>>(new Set());
-const activeStreams: MediaStream[] = [];
-let cachedStream: MediaStream | null = null;
 
-// navigator.mediaDevices.getUserMedia = (originalGetUserMedia => {
-//   return function (constraints) {
-//     console.trace("🎥 getUserMedia called with:", constraints);
+  // Trigger outgoing call via global event
+  useEffect(() => {
+    const onStartCall = () => {
+      if (!selectedChat) return;
+      setPeerId(selectedChat.chatId);
+      setIsCaller(true);
+      setCallVisible(true);
+      setCallId(crypto.randomUUID());
+    };
+    window.addEventListener("start-call", onStartCall);
+    return () => window.removeEventListener("start-call", onStartCall);
+  }, [selectedChat]);
 
-//     if (cachedStream) {
-//       console.log("🔁 Reusing existing MediaStream:", cachedStream.id);
-//       return Promise.resolve(cachedStream);
-//     }
-
-//     return originalGetUserMedia.call(this, constraints).then(stream => {
-//       cachedStream = stream;
-//       activeStreams.push(stream);
-
-//       console.log("🎥 New MediaStream created:", stream.id);
-//       stream.getTracks().forEach(track => {
-//         console.log(`  📡 ${track.kind} track created:`, track.id);
-//       });
-
-//       return stream;
-//     });
-//   };
-// })(navigator.mediaDevices.getUserMedia);
-
+  // Handle incoming socket signal
   useEffect(() => {
     if (!socket) return;
 
     const handleIncomingSignal = async (data: any) => {
       try {
-     
         const recipient = await chatStoreInstance.getRegistrationId(data.senderId);
         const result = await decryptMessage(
           data.encryptedMessage,
@@ -58,16 +50,28 @@ let cachedStream: MediaStream | null = null;
           data.senderId,
           true
         );
-        const message = JSON.parse(result.decryptedText);
 
+        const message = JSON.parse(result.decryptedText);
+        console.log("🔔 Received direct_call message:", message);
+        if (message.messageType === "decline") {
+          console.log("Call declined by peer");
+         handleCallEnd()
+         return
+        }
         setPeerId(message.from);
 
+       
         if (message.type === "offer") {
-          setIsCaller(false);
-  setStartCallUI(true);
-  setTimeout(() => {
-    setRemoteSDP(message.sdp);
-  }, 0);
+          setIncomingCall(message);
+          setCallId(message.callId);
+
+          // Set fallback chat info
+          setIncomingChatInfo({
+            chatId: message.from,
+            name: data.senderName,
+            image: data.senderImage || "/placeholder.png",
+            isGroup: false,
+          });
         }
 
         if (message.type === "answer") {
@@ -94,9 +98,14 @@ let cachedStream: MediaStream | null = null;
     return () => socket.off("direct_call", handleIncomingSignal);
   }, [socket]);
 
+  // Send signal (offer/answer/ICE)
   const handleSignal = (data: any) => {
-    if (!peerId || !selectedChat) return;
-    console.log("Sending signal:", data.type);
+    const targetChat = selectedChat || incomingChatInfo;
+    if (!peerId || !targetChat) {
+      console.warn("No peer or chat context found");
+      return;
+    }
+
     const message = {
       type: data.type,
       sdp: data.sdp,
@@ -108,52 +117,84 @@ let cachedStream: MediaStream | null = null;
       messageType: "call",
     };
 
-    HandleSendMessage(selectedChat, JSON.stringify(message), socket, "direct_call", true);
+    HandleSendMessage(targetChat, JSON.stringify(message), socket, "direct_call", true);
   };
 
   const handleCallEnd = () => {
+      const targetChat = selectedChat || incomingChatInfo;
+     HandleSendMessage(targetChat, JSON.stringify({messageType:"decline"}), socket, "direct_call", true);
+    setCallVisible(false);
     setRemoteSDP(undefined);
     setIsCaller(false);
-    setStartCallUI(false);
+    setIncomingCall(null);
+    setIncomingChatInfo(null);
     setPeerId("");
+    setCallId("");
+    pcRef.current = null;
     iceCandidateQueue.current = [];
     addedCandidates.current.clear();
-    pcRef.current = null;
-    console.log("Ending call and cleaning up...",activeStreams);
-    stopcall(false)
-  //    activeStreams.forEach(stream => {
-  //   stream.getTracks().forEach(track => {
-  //     track.stop();
-  //     console.log(`🛑 Stopped ${track.kind} track:`, track.id);
-  //   });
-  // });
-  // activeStreams.length = 0; // Clear the tracker
-    onCallEnd?.();
-    // forceIndicatorUpdate();
   };
-  useEffect(()=>{
-    if (!startcall) return;
-    handleStartCall()
-  },[startcall])
-  const handleStartCall = () => {
-    if (!selectedChat?.chatId) return;
-    setPeerId(selectedChat.chatId);
-    setIsCaller(true);
-    setStartCallUI(true);
+
+  const handleAnswer = () => {
+    if (!incomingCall) return;
+
+    setRemoteSDP(incomingCall.sdp);
+    setIsCaller(false);
+    setCallVisible(true);
+    setIncomingCall(null);
+
+    // If user hasn't selected the chat yet, preload it
+    if (!selectedChat && incomingChatInfo) {
+      setSelectedChat(incomingChatInfo);
+    }
+  };
+
+  const handleDecline = () => {
+    setIncomingCall(null);
+    setIncomingChatInfo(null);
+    setPeerId("");
+     const targetChat = selectedChat || incomingChatInfo;
+     HandleSendMessage(targetChat, JSON.stringify({messageType:"decline"}), socket, "direct_call", true);
   };
 
   return (
-    <div className="h-full flex flex-col justify-center items-center absolute top-0 left-0 w-full bg-black bg-opacity-50 z-50">
-      {startCallUI &&
-        <VideoCall
-          isCaller={isCaller}
-          remoteSDP={remoteSDP}
-          onSignal={handleSignal}
-          onEnd={handleCallEnd}
-          queuedCandidates={iceCandidateQueue.current}
-          onPeerConnection={(pc) => (pcRef.current = pc)}
-        />
-      }
+    <div className="z-[51]">
+      {/* Incoming Call UI */}
+      {incomingCall && !callVisible && (
+<div className="fixed top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 border border-white bg-[#111B22] shadow-md rounded-md p-4 z-50">
+          <p className="mb-2">
+            📞 Incoming call from {incomingChatInfo?.name || "Unknown"}
+          </p>
+          <div className="flex gap-3">
+            <button
+              className="bg-green-500 text-white px-4 py-1 rounded-md flex items-center gap-2"
+              onClick={handleAnswer}
+            >
+              <Phone size={16} /> Answer
+            </button>
+            <button
+              className="bg-red-500 text-white px-4 py-1 rounded-md flex items-center gap-2"
+              onClick={handleDecline}
+            >
+              <PhoneOff size={16} /> Decline
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Video Call UI */}
+      {callVisible && (
+        <div className="h-full flex flex-col justify-center items-center absolute top-0 left-0 w-full bg-black bg-opacity-50 z-50">
+          <VideoCall
+            isCaller={isCaller}
+            remoteSDP={remoteSDP}
+            onSignal={handleSignal}
+            onEnd={handleCallEnd}
+            queuedCandidates={iceCandidateQueue.current}
+            onPeerConnection={(pc) => (pcRef.current = pc)}
+          />
+        </div>
+      )}
     </div>
   );
 }

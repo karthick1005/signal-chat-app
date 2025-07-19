@@ -552,7 +552,37 @@ export default class ChatStore {
       request.onerror = () => reject(request.error);
     });
   }
+  async addChatMeta(chatId: string, name: string, avatar: string): Promise<void> {
+    if (!this.encryptionKey) await this.generateKey();
+    const db = await this.getDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(this.chatMetaStore, "readwrite");
+      const chatMetaStore = tx.objectStore(this.chatMetaStore);
+      const getMetaRequest = chatMetaStore.get(chatId);
+      getMetaRequest.onsuccess = () => {
+        let meta = getMetaRequest.result;
+        if (!meta) {
+          meta = {
+            chatId: chatId,
+            lastMessage: null,
+            lastMessageIV: null,
+            lastTimestamp: null,
+            unreadCount: 0,
+            name: name || "Unknown",
+            avatar: avatar || "/placeholder.svg",
+          };
 
+          chatMetaStore.put(meta);
+          tx.oncomplete = () => {
+            this.notify(); // 🔔 notify after write
+            resolve();
+          };
+          tx.onerror = () => reject(tx.error);
+        }
+        };
+        getMetaRequest.onerror = () => reject(getMetaRequest.error);
+    });
+  }
   async saveMessage(message: {
     id: string;
     chatId: string;
