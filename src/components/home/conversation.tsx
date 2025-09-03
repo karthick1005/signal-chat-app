@@ -1,10 +1,11 @@
+import React from "react";
 import { formatDate, getMe } from "@/lib/utils"
 import { Avatar, AvatarFallback, AvatarImage } from "../ui/avatar"
 import { MessageSeenSvg } from "@/lib/svgs"
 import { ImageIcon, Users, VideoIcon } from "lucide-react"
 import { useConversationStore } from "@/store/chat-store"
 
-const Conversation = ({ conversation }: { conversation: any }) => {
+const Conversation = React.memo(({ conversation }: { conversation: any }) => {
   console.log(conversation, "this is conversation in conversation component")
   const conversationImage = conversation.groupImage || conversation.image
   const conversationName = conversation.groupName || conversation.name
@@ -64,5 +65,6 @@ const Conversation = ({ conversation }: { conversation: any }) => {
       <hr className="h-[1px] mx-10 bg-gray-primary" />
     </>
   )
-}
+});
+
 export default Conversation
