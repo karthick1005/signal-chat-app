@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { getLocalStream, stopLocalStream } from "./mediaManager";
+import { Button } from "../ui/button";
 
 type Props = {
   isCaller: boolean;
@@ -273,28 +274,24 @@ export default function VideoCall({
       </div>
 
       <div className="flex gap-4 mt-4 flex-wrap">
-        <button
+        <Button
           onClick={toggleVideo}
-          className={`px-4 py-2 text-white rounded-xl shadow ${
-            videoEnabled ? "bg-blue-500" : "bg-gray-500"
-          }`}
+          variant={videoEnabled ? "default" : "secondary"}
         >
           {videoEnabled ? "📹 Camera On" : "📹 Camera Off"}
-        </button>
-        <button
+        </Button>
+        <Button
           onClick={toggleAudio}
-          className={`px-4 py-2 text-white rounded-xl shadow ${
-            audioEnabled ? "bg-green-500" : "bg-gray-500"
-          }`}
+          variant={audioEnabled ? "default" : "secondary"}
         >
           {audioEnabled ? "🎙️ Mic On" : "🎙️ Mic Off"}
-        </button>
-        <button
+        </Button>
+        <Button
           onClick={endCall}
-          className="px-4 py-2 bg-red-600 text-white rounded-xl shadow"
+          variant="destructive"
         >
           📞 End Call
-        </button>
+        </Button>
       </div>
     </div>
   );

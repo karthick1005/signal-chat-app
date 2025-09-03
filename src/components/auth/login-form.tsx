@@ -36,7 +36,8 @@ export function LoginForm({
         });
 
         const data = await response.json();
-        localStorage.setItem("userId",data.userId);
+        localStorage.setItem("userId",data.user.userId);
+        localStorage.setItem("token", data.token);
         if (!response.ok) {
           throw new Error(data.message || "Something went wrong");
         }
@@ -49,7 +50,7 @@ export function LoginForm({
   return (
     <Card
       className={cn(
-        "flex flex-col gap-6 border-2 p-5 rounded-2xl shadow-2xl ",
+        "flex flex-col gap-6 border-2 p-6 rounded-2xl shadow-2xl bg-card text-card-foreground",
         className
       )}
       {...props}
@@ -78,22 +79,12 @@ export function LoginForm({
           </div>
           <div className="flex flex-col gap-6">
             <div className="grid gap-2">
-              <Label htmlFor="email">Email</Label>
+              <Label htmlFor="email">Username</Label>
               <Input
                 id="email"
                 type="text"
                 name="email"
-                placeholder="m@example.com"
-                required
-              />
-            </div>
-            <div className="grid gap-2">
-              <Label htmlFor="email">Password</Label>
-              <Input
-                id="password"
-                type="password"
-                name="password"
-                placeholder="••••••••"
+                placeholder="Enter your username"
                 required
               />
             </div>
