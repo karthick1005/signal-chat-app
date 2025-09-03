@@ -41,34 +41,37 @@ export default function VideoCall({
     });
   };
 
-  // Initial setup
   useEffect(() => {
     let cancelled = false;
 
-    // const pc = new RTCPeerConnection({
-    //   iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
-    // });
     const pc = new RTCPeerConnection({
       iceTransportPolicy: "relay",
-  iceServers: [
-    {
-      urls: ["stun:bn-turn1.xirsys.com"],
-    },
-    {
-      username:
-        "YFCalDue4n-9pGShTlLhyvOkge3ZhnfaOeQNCoFoAwxfLYfAizGmjFxmRr3zigJwAAAAAGh7wUZrYXJ0aGljazEwMDU=",
-      credential: "96991cda-64b9-11f0-9dd1-0242ac140004",
-      urls: [
-        "turn:bn-turn1.xirsys.com:80?transport=udp",
-        "turn:bn-turn1.xirsys.com:3478?transport=udp",
-        "turn:bn-turn1.xirsys.com:80?transport=tcp",
-        "turn:bn-turn1.xirsys.com:3478?transport=tcp",
-        "turns:bn-turn1.xirsys.com:443?transport=tcp",
-        "turns:bn-turn1.xirsys.com:5349?transport=tcp",
-      ],
-    },
+    iceServers: [
+      {
+        urls: "stun:stun.relay.metered.ca:80",
+      },
+      {
+        urls: "turn:global.relay.metered.ca:80",
+        username: "4bc5bb24fafe245054612a8a",
+        credential: "cVV8EzFHMb2sLLEg",
+      },
+      {
+        urls: "turn:global.relay.metered.ca:80?transport=tcp",
+        username: "4bc5bb24fafe245054612a8a",
+        credential: "cVV8EzFHMb2sLLEg",
+      },
+      {
+        urls: "turn:global.relay.metered.ca:443",
+        username: "4bc5bb24fafe245054612a8a",
+        credential: "cVV8EzFHMb2sLLEg",
+      },
+      {
+        urls: "turns:global.relay.metered.ca:443?transport=tcp",
+        username: "4bc5bb24fafe245054612a8a",
+        credential: "cVV8EzFHMb2sLLEg",
+      },
   ],
-});
+    });
 
     pcRef.current = pc;
     onPeerConnection(pc);
@@ -103,11 +106,9 @@ export default function VideoCall({
       .then((stream) => {
         if (cancelled) return;
         localStreamRef.current = stream;
-
         if (localVideoRef.current) {
           localVideoRef.current.srcObject = stream;
         }
-
         stream.getTracks().forEach((track) => pc.addTrack(track, stream));
         setIsInitialized(true);
       })
@@ -126,7 +127,6 @@ export default function VideoCall({
     };
   }, []);
 
-  // Handle remote SDP
   useEffect(() => {
     const pc = pcRef.current;
     if (!remoteSDP || !pc || !isInitialized) return;
@@ -155,7 +155,6 @@ export default function VideoCall({
           await pc.setLocalDescription(answer);
           onSignal({ type: "answer", sdp: answer });
           setHasAnswered(true);
-
           debugLog("✅ Sent answer", { answer });
         } else {
           debugLog("❌ Skipped setRemoteDescription", {
@@ -164,7 +163,6 @@ export default function VideoCall({
           });
         }
 
-        // Drain queued ICE candidates
         if (pc.remoteDescription) {
           for (const candidate of queuedCandidates) {
             try {
@@ -184,7 +182,7 @@ export default function VideoCall({
     handleRemote();
   }, [remoteSDP, isCaller, isInitialized, onSignal, hasAnswered]);
 
-  // Send offer if caller
+  // ✅ UPDATED: Send offer immediately, don't wait for full ICE gathering
   useEffect(() => {
     const startCallerFlow = async () => {
       if (!isCaller || !isInitialized) return;
@@ -194,8 +192,9 @@ export default function VideoCall({
       try {
         const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
-        onSignal({ type: "offer", sdp: offer });
-        debugLog("📤 Sent offer", { offer });
+        debugLog("📤 Offer created and sent", { sdp: offer });
+
+        onSignal({ type: "offer", sdp: offer }); // ✅ Send immediately
       } catch (err) {
         console.error("❌ Failed to create/send offer", err);
       }
@@ -204,13 +203,11 @@ export default function VideoCall({
     startCallerFlow();
   }, [isCaller, isInitialized, onSignal]);
 
-  // Toggle camera/mic
   const toggleVideo = () => {
     const track = localStreamRef.current?.getVideoTracks()[0];
     if (track) {
       track.enabled = !track.enabled;
       setVideoEnabled(track.enabled);
-      console.log("📹 Video track enabled:", track.enabled);
     }
   };
 
@@ -219,21 +216,16 @@ export default function VideoCall({
     if (track) {
       track.enabled = !track.enabled;
       setAudioEnabled(track.enabled);
-      console.log("🎙️ Audio track enabled:", track.enabled);
     }
   };
 
   const endCall = () => {
-    console.log("📞 Ending call...");
-
     if (localVideoRef.current) localVideoRef.current.srcObject = null;
     if (remoteVideoRef.current) remoteVideoRef.current.srcObject = null;
-
     stopLocalStream();
-
     const pc = pcRef.current;
     if (pc) {
-      pc.getSenders().forEach(sender => {
+      pc.getSenders().forEach((sender) => {
         if (sender.track) {
           sender.track.stop();
           pc.removeTrack(sender);
@@ -242,7 +234,6 @@ export default function VideoCall({
       pc.close();
       pcRef.current = null;
     }
-
     onEnd?.();
   };
 
@@ -273,7 +264,9 @@ export default function VideoCall({
           </div>
           {!hasRemoteVideo && (
             <div className="absolute inset-0 flex items-center justify-center text-white text-lg">
-              {connectionState === "connected" ? "Waiting for remote video..." : "Connecting..."}
+              {connectionState === "connected"
+                ? "Waiting for remote video..."
+                : "Connecting..."}
             </div>
           )}
         </div>
@@ -282,13 +275,17 @@ export default function VideoCall({
       <div className="flex gap-4 mt-4 flex-wrap">
         <button
           onClick={toggleVideo}
-          className={`px-4 py-2 text-white rounded-xl shadow ${videoEnabled ? 'bg-blue-500' : 'bg-gray-500'}`}
+          className={`px-4 py-2 text-white rounded-xl shadow ${
+            videoEnabled ? "bg-blue-500" : "bg-gray-500"
+          }`}
         >
           {videoEnabled ? "📹 Camera On" : "📹 Camera Off"}
         </button>
         <button
           onClick={toggleAudio}
-          className={`px-4 py-2 text-white rounded-xl shadow ${audioEnabled ? 'bg-green-500' : 'bg-gray-500'}`}
+          className={`px-4 py-2 text-white rounded-xl shadow ${
+            audioEnabled ? "bg-green-500" : "bg-gray-500"
+          }`}
         >
           {audioEnabled ? "🎙️ Mic On" : "🎙️ Mic Off"}
         </button>
@@ -299,7 +296,6 @@ export default function VideoCall({
           📞 End Call
         </button>
       </div>
-
     </div>
   );
 }

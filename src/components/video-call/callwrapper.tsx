@@ -23,7 +23,7 @@ export default function CallWrapper({ userId }: { userId: string }) {
   const iceCandidateQueue = useRef<RTCIceCandidateInit[]>([]);
   const addedCandidates = useRef<Set<string>>(new Set());
 
-  // Trigger outgoing call via global event
+  // Start outgoing call trigger
   useEffect(() => {
     const onStartCall = () => {
       if (!selectedChat) return;
@@ -36,7 +36,7 @@ export default function CallWrapper({ userId }: { userId: string }) {
     return () => window.removeEventListener("start-call", onStartCall);
   }, [selectedChat]);
 
-  // Handle incoming socket signal
+  // Handle incoming socket messages
   useEffect(() => {
     if (!socket) return;
 
@@ -53,19 +53,25 @@ export default function CallWrapper({ userId }: { userId: string }) {
 
         const message = JSON.parse(result.decryptedText);
         console.log("🔔 Received direct_call message:", message);
+
+        // 🛑 Handle decline signal ONLY if call was active
         if (message.messageType === "decline") {
           console.log("Call declined by peer");
-         handleCallEnd()
-         return
+          if (callVisible || incomingCall) {
+            handleCallEnd();
+          }
+          return;
         }
+
+        // Only handle actual call events
+        if (message.messageType !== "call") return;
+
         setPeerId(message.from);
 
-       
         if (message.type === "offer") {
           setIncomingCall(message);
           setCallId(message.callId);
 
-          // Set fallback chat info
           setIncomingChatInfo({
             chatId: message.from,
             name: data.senderName,
@@ -96,9 +102,9 @@ export default function CallWrapper({ userId }: { userId: string }) {
 
     socket.on("direct_call", handleIncomingSignal);
     return () => socket.off("direct_call", handleIncomingSignal);
-  }, [socket]);
+  }, [socket, callVisible, incomingCall]);
 
-  // Send signal (offer/answer/ICE)
+  // Send signal to peer
   const handleSignal = (data: any) => {
     const targetChat = selectedChat || incomingChatInfo;
     if (!peerId || !targetChat) {
@@ -120,9 +126,21 @@ export default function CallWrapper({ userId }: { userId: string }) {
     HandleSendMessage(targetChat, JSON.stringify(message), socket, "direct_call", true);
   };
 
+  // End call
   const handleCallEnd = () => {
-      const targetChat = selectedChat || incomingChatInfo;
-     HandleSendMessage(targetChat, JSON.stringify({messageType:"decline"}), socket, "direct_call", true);
+    const targetChat = selectedChat || incomingChatInfo;
+
+    // Only notify peer if a call was active
+    if (callVisible || incomingCall) {
+      HandleSendMessage(
+        targetChat,
+        JSON.stringify({ messageType: "decline" }),
+        socket,
+        "direct_call",
+        true
+      );
+    }
+
     setCallVisible(false);
     setRemoteSDP(undefined);
     setIsCaller(false);
@@ -135,33 +153,42 @@ export default function CallWrapper({ userId }: { userId: string }) {
     addedCandidates.current.clear();
   };
 
+  // Answer call
   const handleAnswer = () => {
     if (!incomingCall) return;
 
     setRemoteSDP(incomingCall.sdp);
+    setCallId(incomingCall.callId); // ✅ restore callId
     setIsCaller(false);
     setCallVisible(true);
     setIncomingCall(null);
 
-    // If user hasn't selected the chat yet, preload it
     if (!selectedChat && incomingChatInfo) {
       setSelectedChat(incomingChatInfo);
     }
   };
 
+  // Decline call manually
   const handleDecline = () => {
+    const targetChat = selectedChat || incomingChatInfo;
+    HandleSendMessage(
+      targetChat,
+      JSON.stringify({ messageType: "decline" }),
+      socket,
+      "direct_call",
+      true
+    );
+
     setIncomingCall(null);
     setIncomingChatInfo(null);
     setPeerId("");
-     const targetChat = selectedChat || incomingChatInfo;
-     HandleSendMessage(targetChat, JSON.stringify({messageType:"decline"}), socket, "direct_call", true);
   };
 
   return (
     <div className="z-[51]">
-      {/* Incoming Call UI */}
+      {/* Incoming Call Prompt */}
       {incomingCall && !callVisible && (
-<div className="fixed top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 border border-white bg-[#111B22] shadow-md rounded-md p-4 z-50">
+        <div className="fixed top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 border border-white bg-[#111B22] shadow-md rounded-md p-4 z-50">
           <p className="mb-2">
             📞 Incoming call from {incomingChatInfo?.name || "Unknown"}
           </p>
@@ -182,7 +209,7 @@ export default function CallWrapper({ userId }: { userId: string }) {
         </div>
       )}
 
-      {/* Video Call UI */}
+      {/* Video UI */}
       {callVisible && (
         <div className="h-full flex flex-col justify-center items-center absolute top-0 left-0 w-full bg-black bg-opacity-50 z-50">
           <VideoCall

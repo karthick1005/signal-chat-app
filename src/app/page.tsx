@@ -3,15 +3,18 @@
 import LeftPanel from "@/components/home/left-panel"
 import RightPanel from "@/components/home/right-panel"
 import { useTheme } from "next-themes"
-import { useEffect, useState } from "react";
+import { useContext, useEffect, useState } from "react";
 import { useRouter } from 'next/navigation';
 import { Libinit } from "@/lib/signal/signal";
 import ChatStore from "@/lib/signal/ChatStore";
 import chatStoreInstance from "@/lib/chatStoreInstance";
+import { SocketInterface } from "@/lib/types";
+import { SocketContext } from "@/hooks/socket";
 
 export default function Home() {
  const router = useRouter();
-
+const { connectSocket } =
+    useContext<SocketInterface | null>(SocketContext) || {};
 useEffect(() => {
   const unsubscribe = chatStoreInstance.subscribe(async () => {
     console.log("🔔 Zustand subscriber triggered");
@@ -33,7 +36,9 @@ useEffect(() => {
 
   useEffect(()=>{
     Libinit()
-    // connectSocket()
+    if (typeof connectSocket === "function") {
+      connectSocket();
+    }
   },[])
   useEffect(() => {
     console.log("Checking preKeyBundle in localStorage",localStorage.getItem("preKeyBundle"));

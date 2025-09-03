@@ -25,8 +25,7 @@ const SocketProvider: React.FC<{ children: React.ReactNode }> = ({
   // const chatServerContext = useContext(serverContext);
 
   const connectSocket = () => {
-    if (socket) return; // Prevent multiple connections
-
+    if (socket||localStorage.getItem("userId")===null) return; // Prevent multiple connections
     console.log("🛜 Connecting to WebSocket...");
 
     const newSocket = io(process.env.NEXT_PUBLIC_WS || "ws://localhost:8000", {
