@@ -29,7 +29,7 @@ interface GroupMetadata {
   lastUpdated: number;
 }
 
-class WhatsAppGroupService {
+export class WhatsAppGroupService {
   private signalGroupService: WhatsAppSignalGroupService | null = null;
   private socket: any = null;
 
@@ -141,6 +141,132 @@ class WhatsAppGroupService {
 
     } catch (error) {
       console.error('Failed to create group:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Remove a member from a group (admin only)
+   */
+  async removeMemberFromGroup(groupId: string, memberIdToRemove: string, adminId: string): Promise<void> {
+    try {
+      const group = await chatStoreInstance.getGroupMeta(groupId);
+      if (!group) {
+        throw new Error('Group not found');
+      }
+
+      // Check if user is admin
+      if (!group.admins.includes(adminId)) {
+        throw new Error('Only admins can remove members');
+      }
+
+      // Prevent admin from removing themselves, they should use leaveGroup
+      if (memberIdToRemove === adminId) {
+        throw new Error('Admins cannot remove themselves, use "Leave Group" instead.');
+      }
+
+      // Check if member exists
+      const memberExists = group.members.some((m: any) => m.userId === memberIdToRemove);
+      if (!memberExists) {
+        throw new Error('User is not a member of this group');
+      }
+
+      // Remove user from members list and admins list (if they were an admin)
+      const updatedMembers = group.members.filter((m: any) => m.userId !== memberIdToRemove);
+      const updatedAdmins = group.admins.filter((a: any) => a !== memberIdToRemove);
+
+      const updatedGroup = {
+        ...group,
+        members: updatedMembers,
+        admins: updatedAdmins,
+        version: group.version + 1,
+        lastUpdated: Date.now()
+      };
+
+      // Update local group metadata
+      await chatStoreInstance.saveGroupMeta(groupId, {
+        ...updatedGroup,
+        needsAnnouncement: true
+      });
+
+      // Announce member removal to remaining members
+      await this.announceGroupUpdate(updatedGroup, 'member_removed', {
+        removedMember: memberIdToRemove,
+        removedBy: adminId
+      });
+
+      // Send a notification to the removed member so they can delete the group
+      if (this.socket && this.socket.connected) {
+        this.socket.emit('group_removed', {
+          targetUserId: memberIdToRemove,
+          groupId: groupId,
+          removedBy: adminId
+        });
+        console.log(`📨 Sent group removal notification to ${memberIdToRemove}`);
+      }
+
+      // The key rotation will be triggered by admins who receive the 'member_removed' event
+      // via handleIncomingGroupUpdate. No need to call it directly here to avoid races.
+      console.log(`✅ Member ${memberIdToRemove} removed. Key rotation will be initiated by an admin.`);
+
+    } catch (error) {
+      console.error('Failed to remove member from group:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Rotate the Sender Key for a group (admin only)
+   * This should be called when a member is removed or leaves.
+   */
+  async rotateGroupKey(groupId: string, rotatorId: string): Promise<void> {
+    try {
+      const group = await chatStoreInstance.getGroupMeta(groupId);
+      if (!group) {
+        throw new Error('Group not found');
+      }
+
+      // Check if user is admin
+      if (!group.admins.includes(rotatorId)) {
+        throw new Error('Only admins can rotate group keys');
+      }
+
+      console.log(`🔄 Rotating Sender Key for group ${groupId} by ${rotatorId}`);
+
+      // Generate a new Sender Key for this group
+      // This will overwrite the old one
+      const newSenderKey = await senderKeyStore.generateMySenderKey(groupId, rotatorId);
+      console.log(`🔐 New Sender Key generated for group ${groupId}`);
+
+      // Distribute the new Sender Key to all current group members
+      console.log(`🔑 Distributing new Sender Key to ${group.members.length} members`);
+      for (const member of group.members) {
+        if (this.socket) {
+          this.socket.emit('direct_message', {
+            receiverId: member.userId,
+            senderId: rotatorId,
+            senderName: localStorage.getItem('username'), // Or a more reliable way to get the admin's name
+            encryptedMessage: JSON.stringify({
+              type: 'sender_key_distribution',
+              senderKey: newSenderKey,
+              groupId: groupId,
+              isKeyRotation: true // Add a flag to indicate this is a key rotation
+            }),
+            type: 'sender_key_distribution'
+          });
+          console.log(`🔑 New Sender Key sent to ${member.userId}`);
+        }
+      }
+
+      // Optionally, announce the key rotation to the group
+      await this.announceGroupUpdate(group, 'key_rotated', {
+        rotatedBy: rotatorId
+      });
+
+      console.log(`✅ Sender Key for group ${groupId} rotated successfully.`);
+
+    } catch (error) {
+      console.error(`Failed to rotate group key for ${groupId}:`, error);
       throw error;
     }
   }
@@ -361,6 +487,22 @@ class WhatsAppGroupService {
         });
       }
       // If versions are equal, no action needed
+
+      // Handle key rotation trigger
+      if (
+        (data.action === 'member_left' || data.action === 'member_removed') &&
+        localGroup && localGroup.admins.includes(localStorage.getItem('userId') || '')
+      ) {
+        // To prevent multiple admins from rotating the key simultaneously,
+        // we'll designate the first admin in the list as the rotator.
+        const currentUserId = localStorage.getItem('userId');
+        if (localGroup.admins[0] === currentUserId) {
+          console.log(`👑 I am the designated admin. Rotating key for group ${data.groupId} due to ${data.action}.`);
+          await this.rotateGroupKey(data.groupId, currentUserId);
+        } else {
+          console.log(`Another admin (${localGroup.admins[0]}) will handle the key rotation.`);
+        }
+      }
 
     } catch (error) {
       console.error('Failed to handle incoming group update:', error);
