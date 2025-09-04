@@ -659,38 +659,90 @@ export default class ChatStore {
                   hasGroupKey: !!meta.groupKey 
                 });
               } else {
-                // Regular direct chat
+                // Regular direct chat - try to get existing chat info first
+                const existingChatRequest = chatMetaStore.getAll();
+                existingChatRequest.onsuccess = () => {
+                  const allChats = existingChatRequest.result;
+                  const existingChat = allChats.find(chat => chat.chatId === message.chatId);
+                  
+                  let chatName = "Unknown";
+                  if (existingChat && existingChat.name) {
+                    // Use existing chat name (already correctly set during session creation)
+                    chatName = existingChat.name;
+                  } else {
+                    // Fallback logic for new chats
+                    const currentUserId = localStorage.getItem("userId");
+                    if (message.senderId.toString() === currentUserId) {
+                      // Current user is sending to someone else - chat name should be recipient's name
+                      // For now, we'll try to preserve existing name or use a placeholder
+                      chatName = "Contact"; // Fallback - ideally we'd look up the recipient's name
+                    } else {
+                      // Someone else is sending to current user - chat name should be sender's name
+                      chatName = message.sender.name || "Unknown";
+                    }
+                  }
+                  
+                  meta = {
+                    chatId: message.chatId,
+                    lastMessage: lastMessageCiphertext,
+                    lastMessageIV,
+                    lastTimestamp: message._creationTime,
+                    unreadCount: message.read ? 0 : 1,
+                    name: chatName,
+                    avatar: "/placeholder.svg",
+                  };
+                  console.log('💾 Creating direct chat metadata:', { 
+                    name: meta.name, 
+                    isGroup: false,
+                    chatId: message.chatId,
+                    senderId: message.senderId,
+                    currentUserId: localStorage.getItem("userId"),
+                    usedExistingName: !!existingChat
+                  });
+                  
+                  chatMetaStore.put(meta);
+                };
+              }
+              
+              if (groupMeta) {
+                chatMetaStore.put(meta);
+              }
+            };
+            
+            groupRequest.onerror = () => {
+              console.warn('⚠️ Group lookup failed, treating as direct chat');
+              
+              // Try to get existing chat info first
+              const existingChatRequest = chatMetaStore.getAll();
+              existingChatRequest.onsuccess = () => {
+                const allChats = existingChatRequest.result;
+                const existingChat = allChats.find(chat => chat.chatId === message.chatId);
+                
+                let chatName = "Unknown";
+                if (existingChat && existingChat.name) {
+                  // Use existing chat name
+                  chatName = existingChat.name;
+                } else {
+                  // Fallback logic for new chats
+                  const currentUserId = localStorage.getItem("userId");
+                  if (message.senderId.toString() === currentUserId) {
+                    chatName = "Contact";
+                  } else {
+                    chatName = message.sender.name || "Unknown";
+                  }
+                }
+                
                 meta = {
                   chatId: message.chatId,
                   lastMessage: lastMessageCiphertext,
                   lastMessageIV,
                   lastTimestamp: message._creationTime,
                   unreadCount: message.read ? 0 : 1,
-                  name: message.sender.name || "Unknown",
+                  name: chatName,
                   avatar: "/placeholder.svg",
                 };
-                console.log('💾 Creating direct chat metadata:', { 
-                  name: meta.name, 
-                  isGroup: false 
-                });
-              }
-              
-              chatMetaStore.put(meta);
-            };
-            
-            groupRequest.onerror = () => {
-              console.warn('⚠️ Group lookup failed, treating as direct chat');
-              // Fallback to regular chat if group lookup fails
-              meta = {
-                chatId: message.chatId,
-                lastMessage: lastMessageCiphertext,
-                lastMessageIV,
-                lastTimestamp: message._creationTime,
-                unreadCount: message.read ? 0 : 1,
-                name: message.sender.name || "Unknown",
-                avatar: "/placeholder.svg",
+                chatMetaStore.put(meta);
               };
-              chatMetaStore.put(meta);
             };
             
           } else {
@@ -707,9 +759,14 @@ export default class ChatStore {
             }
             
             // Only update name if it's not a group (groups should keep their group name)
-            if (!meta.isGroup && meta.name !== message.sender.name) {
-              updatedMeta.name = message.sender.name;
-            }
+            // For direct chats, we should NEVER change the name based on who sends messages
+            // The chat name represents the OTHER person in the conversation, not the current sender
+            // if (!meta.isGroup && meta.name !== message.sender.name) {
+            //   updatedMeta.name = message.sender.name;
+            // }
+            
+            // ✅ FIXED: Don't update direct chat names based on message senders
+            // Direct chat names should remain constant and represent the other participant
             
             console.log('💾 Updating existing chat metadata:', { 
               name: updatedMeta.name, 
