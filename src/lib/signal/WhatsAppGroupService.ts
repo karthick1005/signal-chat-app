@@ -1,0 +1,493 @@
+/**
+ * WhatsApp-style Group Management Service with Signal Protocol
+ * Groups exist only on devices that are members - no central server database
+ * Now integrates with Sender Key system for proper WhatsApp-style encryption
+ */
+
+import chatStoreInstance from '../chatStoreInstance';
+import { v4 as uuidv4 } from 'uuid';
+import { senderKeyStore } from './SenderKeyStore';
+import WhatsAppSignalGroupService from './WhatsAppSignalGroupService';
+
+interface GroupMember {
+  userId: string;
+  name: string;
+  joinedAt: number;
+  isAdmin: boolean;
+}
+
+interface GroupMetadata {
+  groupId: string;
+  name: string;
+  description?: string;
+  avatar?: string;
+  createdBy: string;
+  createdAt: number;
+  members: GroupMember[];
+  admins: string[];
+  version: number;
+  lastUpdated: number;
+}
+
+class WhatsAppGroupService {
+  private signalGroupService: WhatsAppSignalGroupService | null = null;
+  private socket: any = null;
+
+  constructor(socket?: any) {
+    if (socket) {
+      this.setSocket(socket);
+    }
+  }
+
+  setSocket(socket: any): void {
+    this.socket = socket;
+    if (socket) {
+      this.signalGroupService = new WhatsAppSignalGroupService(socket);
+    }
+  }
+
+  /**
+   * Create a new group (WhatsApp-style)
+   * Group is created locally and then announced to initial members
+   */
+  async createGroup(
+    name: string,
+    initialMembers: string[],
+    creatorId: string,
+    description?: string
+  ): Promise<string> {
+    try {
+      const groupId = uuidv4();
+      const now = Date.now();
+      
+      // Create initial group metadata (Sender Keys will handle encryption)
+      const groupMetadata: GroupMetadata = {
+        groupId,
+        name,
+        description,
+        createdBy: creatorId,
+        createdAt: now,
+        members: [
+          // Creator is always the first member and admin
+          {
+            userId: creatorId,
+            name: 'You', // Will be updated with actual name
+            joinedAt: now,
+            isAdmin: true
+          },
+          // Add initial members
+          ...initialMembers.map(userId => ({
+            userId,
+            name: '', // Will be updated when they join
+            joinedAt: now,
+            isAdmin: false
+          }))
+        ],
+        admins: [creatorId],
+        version: 1,
+        lastUpdated: now
+      };
+
+      // Store group locally on creator's device
+      await chatStoreInstance.saveGroupMeta(groupId, {
+        ...groupMetadata,
+        needsAnnouncement: true, // Mark for announcement to members
+        isAdmin: true,
+        canAnnounce: true
+      });
+
+      // Initialize Sender Key for this group and distribute to members
+      if (this.signalGroupService) {
+        const mySenderKey = await senderKeyStore.generateMySenderKey(groupId, creatorId);
+        console.log(`🔐 Sender Key generated for group ${groupId}`);
+        
+        // Distribute the Sender Key to all group members immediately
+        console.log(`🔑 Distributing initial Sender Key to ${initialMembers.length} members`);
+        for (const memberId of initialMembers) {
+          if (this.socket) {
+            this.socket.emit('direct_message', {
+              receiverId: memberId,
+              senderId: creatorId,
+              senderName: localStorage.getItem('username'),
+              encryptedMessage: JSON.stringify({
+                type: 'sender_key_distribution',
+                senderKey: mySenderKey,
+                groupId: groupId
+              }),
+              type: 'sender_key_distribution'
+            });
+            console.log(`🔑 Initial Sender Key sent to ${memberId}`);
+          }
+        }
+      }
+
+      // Announce group creation to initial members (will distribute Sender Keys)
+      await this.announceGroupCreation(groupMetadata);
+
+      console.log(`✅ Group "${name}" created locally with ID: ${groupId}`);
+      return groupId;
+
+    } catch (error) {
+      console.error('Failed to create group:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Join a group when invited (receives group metadata from existing member)
+   */
+  async joinGroup(groupMetadata: GroupMetadata, invitedBy: string): Promise<void> {
+    try {
+      const userId = localStorage.getItem('userId') || '';
+      
+      // Check if user is in the members list
+      const isMember = groupMetadata.members.some(m => m.userId === userId);
+      if (!isMember) {
+        throw new Error('User not invited to this group');
+      }
+
+      // Store group locally on user's device
+      await chatStoreInstance.saveGroupMeta(groupMetadata.groupId, {
+        ...groupMetadata,
+        joinedAt: Date.now(),
+        invitedBy,
+        isAdmin: groupMetadata.admins.includes(userId),
+        canAnnounce: false // Only receive metadata, don't announce
+      });
+
+      // Notify other members of successful join
+      await this.notifyGroupJoin(groupMetadata.groupId, userId);
+
+      console.log(`✅ Joined group "${groupMetadata.name}"`);
+
+    } catch (error) {
+      console.error('Failed to join group:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Add member to existing group (admin only)
+   */
+  async addMemberToGroup(groupId: string, newMemberUserId: string, addedBy: string): Promise<void> {
+    try {
+      const group = await chatStoreInstance.getGroupMeta(groupId);
+      if (!group) {
+        throw new Error('Group not found');
+      }
+
+      // Check if user is admin
+      if (!group.admins.includes(addedBy)) {
+        throw new Error('Only admins can add members');
+      }
+
+      // Check if member already exists
+      const existingMember = group.members.find((m: any) => m.userId === newMemberUserId);
+      if (existingMember) {
+        throw new Error('User is already a member');
+      }
+
+      // Add new member
+      const updatedGroup = {
+        ...group,
+        members: [
+          ...group.members,
+          {
+            userId: newMemberUserId,
+            name: '', // Will be updated by the member
+            joinedAt: Date.now(),
+            isAdmin: false
+          }
+        ],
+        version: group.version + 1,
+        lastUpdated: Date.now()
+      };
+
+      // Update local group
+      await chatStoreInstance.saveGroupMeta(groupId, {
+        ...updatedGroup,
+        needsAnnouncement: true
+      });
+
+      // Send group invitation to new member
+      await this.sendGroupInvitation(newMemberUserId, updatedGroup);
+
+      // Announce member addition to existing members
+      await this.announceGroupUpdate(updatedGroup, 'member_added', {
+        addedMember: newMemberUserId,
+        addedBy
+      });
+
+      console.log(`✅ Added ${newMemberUserId} to group ${groupId}`);
+
+    } catch (error) {
+      console.error('Failed to add member to group:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Leave a group
+   */
+  async leaveGroup(groupId: string, userId: string): Promise<void> {
+    try {
+      const group = await chatStoreInstance.getGroupMeta(groupId);
+      if (!group) {
+        throw new Error('Group not found');
+      }
+
+      // Remove user from members list
+      const updatedMembers = group.members.filter((m: any) => m.userId !== userId);
+      const updatedAdmins = group.admins.filter((a: any) => a !== userId);
+
+      // If last admin is leaving, promote someone else or delete group
+      if (updatedAdmins.length === 0 && updatedMembers.length > 0) {
+        // Promote first remaining member to admin
+        updatedAdmins.push(updatedMembers[0].userId);
+        updatedMembers[0].isAdmin = true;
+      }
+
+      const updatedGroup = {
+        ...group,
+        members: updatedMembers,
+        admins: updatedAdmins,
+        version: group.version + 1,
+        lastUpdated: Date.now()
+      };
+
+      if (updatedMembers.length === 0) {
+        // Last member leaving - delete group locally
+        await chatStoreInstance.deleteGroup(groupId);
+        console.log(`🗑️ Group ${groupId} deleted (last member left)`);
+      } else {
+        // Announce departure to remaining members
+        await this.announceGroupUpdate(updatedGroup, 'member_left', {
+          leftMember: userId
+        });
+      }
+
+      // Delete group from leaving user's device
+      await chatStoreInstance.deleteGroup(groupId);
+      console.log(`👋 Left group ${groupId}`);
+
+    } catch (error) {
+      console.error('Failed to leave group:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Update group metadata (name, description, etc.)
+   */
+  async updateGroupMetadata(
+    groupId: string, 
+    updates: Partial<GroupMetadata>, 
+    updatedBy: string
+  ): Promise<void> {
+    try {
+      const group = await chatStoreInstance.getGroupMeta(groupId);
+      if (!group) {
+        throw new Error('Group not found');
+      }
+
+      // Check if user is admin
+      if (!group.admins.includes(updatedBy)) {
+        throw new Error('Only admins can update group metadata');
+      }
+
+      const updatedGroup = {
+        ...group,
+        ...updates,
+        version: group.version + 1,
+        lastUpdated: Date.now(),
+        updatedBy
+      };
+
+      // Update local group
+      await chatStoreInstance.saveGroupMeta(groupId, {
+        ...updatedGroup,
+        needsAnnouncement: true
+      });
+
+      // Announce update to all members
+      await this.announceGroupUpdate(updatedGroup, 'metadata_updated', updates);
+
+      console.log(`✅ Updated group ${groupId} metadata`);
+
+    } catch (error) {
+      console.error('Failed to update group metadata:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Handle incoming group metadata updates from other members
+   */
+  async handleIncomingGroupUpdate(data: {
+    groupId: string;
+    metadata: GroupMetadata;
+    action: string;
+    details?: any;
+    fromMember: string;
+  }): Promise<void> {
+    try {
+      const localGroup = await chatStoreInstance.getGroupMeta(data.groupId);
+      
+      // Conflict resolution using version numbers
+      if (!localGroup || data.metadata.version > (localGroup.version || 0)) {
+        // Incoming version is newer, update local copy
+        await chatStoreInstance.saveGroupMeta(data.groupId, {
+          ...data.metadata,
+          needsAnnouncement: false // Don't re-announce received updates
+        });
+        
+        console.log(`📥 Updated group ${data.groupId} from ${data.fromMember} (action: ${data.action})`);
+      } else if (data.metadata.version < localGroup.version) {
+        // Local version is newer, send our version back
+        await this.announceGroupUpdate(localGroup, 'metadata_sync', {
+          syncReason: 'local_version_newer'
+        });
+      }
+      // If versions are equal, no action needed
+
+    } catch (error) {
+      console.error('Failed to handle incoming group update:', error);
+    }
+  }
+
+  // Private helper methods
+
+  private async announceGroupCreation(groupMetadata: GroupMetadata): Promise<void> {
+    if (this.socket && this.socket.connected) {
+      // Send individual invitations to each member (excluding the creator)
+      const currentUserId = localStorage.getItem('userId') || '';
+      for (const member of groupMetadata.members) {
+        if (member.userId !== currentUserId) {
+          await this.sendGroupInvitation(member.userId, groupMetadata);
+        }
+      }
+      
+      // Also emit group_created for any general group creation handling
+      this.socket.emit('group_created', {
+        groupMetadata,
+        action: 'create',
+        timestamp: Date.now()
+      });
+      console.log(`📢 Announced group creation: ${groupMetadata.name} with ${groupMetadata.members.length - 1} invitations sent`);
+    }
+  }
+
+  private async sendGroupInvitation(userId: string, groupMetadata: GroupMetadata): Promise<void> {
+    if (this.socket && this.socket.connected) {
+      this.socket.emit('group_invitation', {
+        targetUserId: userId,
+        groupMetadata,
+        action: 'invite',
+        timestamp: Date.now()
+      });
+      console.log(`📨 Sent group invitation to ${userId}`);
+    }
+  }
+
+  // Distribute Sender Key to group members during group creation
+  private async distributeSenderKeyToMembers(groupId: string, members: GroupMember[]): Promise<void> {
+    try {
+      // Get my current sender key for this group
+      const mySenderKey = await senderKeyStore.getMySenderKey(groupId);
+      
+      if (!mySenderKey) {
+        console.error(`❌ No Sender Key found for group ${groupId} - cannot distribute`);
+        return;
+      }
+
+      const currentUserId = localStorage.getItem('userId') || '';
+      
+      // Send sender key to each member (except myself)
+      for (const member of members) {
+        if (member.userId !== currentUserId && this.socket) {
+          try {
+            // Send sender key as a direct message
+            this.socket.emit('direct_message', {
+              receiverId: member.userId,
+              senderId: currentUserId,
+              senderName: localStorage.getItem('username'),
+              encryptedMessage: JSON.stringify({
+                type: 'sender_key_distribution',
+                senderKey: mySenderKey,
+                groupId: groupId
+              }),
+              type: 'sender_key_distribution'
+            });
+
+            console.log(`🔑 Initial Sender Key sent to ${member.userId} for group ${groupId}`);
+
+          } catch (error) {
+            console.error(`❌ Failed to send Sender Key to ${member.userId}:`, error);
+          }
+        }
+      }
+    } catch (error) {
+      console.error('❌ Failed to create group:', error);
+      throw error;
+    }
+  }
+
+  private async announceGroupUpdate(
+    groupMetadata: GroupMetadata,
+    action: string,
+    details?: any
+  ): Promise<void> {
+    if (this.socket && this.socket.connected) {
+      this.socket.emit('group_metadata_update', {
+        groupId: groupMetadata.groupId,
+        metadata: groupMetadata,
+        action,
+        details,
+        timestamp: Date.now()
+      });
+      console.log(`📢 Announced group update: ${action} for ${groupMetadata.groupId}`);
+    }
+  }
+
+  private async notifyGroupJoin(groupId: string, userId: string): Promise<void> {
+    if (this.socket && this.socket.connected) {
+      this.socket.emit('group_member_joined', {
+        groupId,
+        userId,
+        timestamp: Date.now()
+      });
+      console.log(`📢 Notified group ${groupId} of member join: ${userId}`);
+    }
+  }
+
+  /**
+   * Get all groups for current user
+   */
+  async getUserGroups(): Promise<GroupMetadata[]> {
+    try {
+      const allGroups = await chatStoreInstance.getAllGroups();
+      return allGroups.map(group => ({
+        ...group,
+        isLocalGroup: true
+      }));
+    } catch (error) {
+      console.error('Failed to get user groups:', error);
+      return [];
+    }
+  }
+
+  /**
+   * Get specific group metadata
+   */
+  async getGroupMetadata(groupId: string): Promise<GroupMetadata | null> {
+    try {
+      return await chatStoreInstance.getGroupMeta(groupId);
+    } catch (error) {
+      console.error('Failed to get group metadata:', error);
+      return null;
+    }
+  }
+}
+
+export const whatsappGroupService = new WhatsAppGroupService();
+export default whatsappGroupService;

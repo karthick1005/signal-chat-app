@@ -597,6 +597,106 @@ await store.removeIdentityKey(address.toString());
 // }
 }
 
+export const encryptReaction = async (reaction: { userId: string; emoji: string }, recipientId: string | number, senderId: string) => {
+  const libsignal: LibSignal = window.libsignal;
+  const store = new MySignalProtocolStore();
+
+  const recipientIdNumber = typeof recipientId === "string" ? parseInt(recipientId, 10) : recipientId;
+  if (isNaN(recipientIdNumber)) {
+    console.error("❌ Invalid recipientId:", recipientId);
+    return;
+  }
+
+  const address = new libsignal.SignalProtocolAddress(recipientIdNumber, 1);
+  const existingSession = await store.loadSession(address.toString());
+  if (!existingSession) {
+    console.error("❌ No session found for", recipientIdNumber);
+    return;
+  }
+
+  const sessionCipher = new libsignal.SessionCipher(store, address);
+  const plaintext = JSON.stringify(reaction);
+
+  const ciphertext = await sessionCipher.encrypt(plaintext);
+  return ciphertext;
+};
+
+export const decryptReaction = async (encryptedReaction: { body: ArrayBuffer | Uint8Array | string; type: number; messageId: string }, senderId: string | number) => {
+  const libsignal: LibSignal = window.libsignal;
+  const store = new MySignalProtocolStore();
+
+  const senderIdNumber = typeof senderId === "string" ? parseInt(senderId, 10) : senderId;
+  if (isNaN(senderIdNumber)) {
+    console.error("❌ Invalid senderId:", senderId);
+    return;
+  }
+
+  const address = new libsignal.SignalProtocolAddress(senderIdNumber, 1);
+  const sessionCipher = new libsignal.SessionCipher(store, address);
+
+  const messageType = encryptedReaction.type;
+  const messageBody = encryptedReaction.body;
+
+  if (!messageBody || typeof messageType !== "number") {
+    console.error("❌ Invalid encrypted reaction format.");
+    return;
+  }
+
+  let decryptedArrayBuffer;
+  if (messageType === 3) {
+    decryptedArrayBuffer = await sessionCipher.decryptPreKeyWhisperMessage(messageBody, 'binary');
+  } else if (messageType === 1) {
+    decryptedArrayBuffer = await sessionCipher.decryptWhisperMessage(messageBody, 'binary');
+  } else {
+    throw new Error("Unsupported message type: " + messageType);
+  }
+
+  const decryptedText = new TextDecoder().decode(decryptedArrayBuffer);
+  return JSON.parse(decryptedText);
+};
+
+// AES encryption for groups
+export const encryptGroupReaction = async (reaction: { userId: string; emoji: string }, groupKey: string) => {
+  const key = await crypto.subtle.importKey("raw", base64ToArrayBuffer(groupKey), { name: "AES-GCM" }, false, ["encrypt"]);
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const plaintext = new TextEncoder().encode(JSON.stringify(reaction));
+  const ciphertext = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, plaintext);
+  return {
+    body: arrayBufferToBase64(ciphertext),
+    iv: arrayBufferToBase64(iv.buffer),
+  };
+};
+
+export const decryptGroupReaction = async (encryptedReaction: { body: string; iv: string }, groupKey: string) => {
+  const key = await crypto.subtle.importKey("raw", base64ToArrayBuffer(groupKey), { name: "AES-GCM" }, false, ["decrypt"]);
+  const iv = base64ToArrayBuffer(encryptedReaction.iv);
+  const ciphertext = base64ToArrayBuffer(encryptedReaction.body);
+  const plaintext = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, ciphertext);
+  const decryptedText = new TextDecoder().decode(plaintext);
+  return JSON.parse(decryptedText);
+};
+
+// AES encryption for group messages
+export const encryptGroupMessage = async (message: string, groupKey: string) => {
+  const key = await crypto.subtle.importKey("raw", base64ToArrayBuffer(groupKey), { name: "AES-GCM" }, false, ["encrypt"]);
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const plaintext = new TextEncoder().encode(message);
+  const ciphertext = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, plaintext);
+  return {
+    body: arrayBufferToBase64(ciphertext),
+    iv: arrayBufferToBase64(iv.buffer),
+    type: 1, // Dummy type
+  };
+};
+
+export const decryptGroupMessage = async (encryptedMessage: { body: string; iv: string }, groupKey: string) => {
+  const key = await crypto.subtle.importKey("raw", base64ToArrayBuffer(groupKey), { name: "AES-GCM" }, false, ["decrypt"]);
+  const iv = base64ToArrayBuffer(encryptedMessage.iv);
+  const ciphertext = base64ToArrayBuffer(encryptedMessage.body);
+  const plaintext = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, ciphertext);
+  return new TextDecoder().decode(plaintext);
+};
+
 
 
 

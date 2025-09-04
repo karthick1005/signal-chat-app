@@ -8,11 +8,13 @@ import { useRouter } from 'next/navigation';
 import { Libinit } from "@/lib/signal/signal";
 import ChatStore from "@/lib/signal/ChatStore";
 import chatStoreInstance from "@/lib/chatStoreInstance";
+import { useConversationStore } from "@/store/chat-store";
 import { SocketInterface } from "@/lib/types";
 import { SocketContext } from "@/hooks/socket";
 
 export default function Home() {
  const router = useRouter();
+ const { fetchChats } = useConversationStore();
 const { connectSocket } =
     useContext<SocketInterface | null>(SocketContext) || {};
 useEffect(() => {
@@ -38,8 +40,12 @@ useEffect(() => {
     Libinit()
     if (typeof connectSocket === "function") {
       connectSocket();
+      // Fetch chats after socket connects
+      setTimeout(() => {
+        fetchChats();
+      }, 1000); // Small delay to ensure socket is fully connected
     }
-  },[])
+  },[connectSocket, fetchChats])
   useEffect(() => {
     console.log("Checking preKeyBundle in localStorage",localStorage.getItem("preKeyBundle"));
     if(localStorage.getItem("preKeyBundle") === null){

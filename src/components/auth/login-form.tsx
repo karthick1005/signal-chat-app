@@ -9,6 +9,7 @@ import { cn } from "@/lib/utils";
 import { Card } from "../ui/card";
 import { keyInitialize } from "@/lib/signal/signal";
 import { useRouter } from "next/navigation";
+import toast from "react-hot-toast";
 
 export function LoginForm({
   className,
@@ -44,6 +45,7 @@ export function LoginForm({
         router.push("/");
       } catch (error) {
         console.error("Error during login:", error);
+        toast.error("Login failed. Please try again.");
       }
     }
   };
@@ -86,9 +88,11 @@ export function LoginForm({
                 name="email"
                 placeholder="Enter your username"
                 required
+                aria-describedby="username-help"
               />
+              <span id="username-help" className="sr-only">Enter your unique username to log in</span>
             </div>
-            <Button type="submit" className="w-full">
+            <Button type="submit" className="w-full" aria-label="Log in to your account">
               Login
             </Button>
           </div>
