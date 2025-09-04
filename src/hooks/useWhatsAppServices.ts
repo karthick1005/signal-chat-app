@@ -156,7 +156,7 @@ export function useWhatsAppServices(config: WhatsAppServiceConfig = {}) {
       reactionService.getReactionSummary(messageId, userId),
     
     // WhatsApp-style group controls (no central server)
-    createGroup: (name: string, members: string[], creatorId: string, description?: string) =>
+    createGroup: (name: string, members: Array<{userId: string, name: string}> | string[], creatorId: string, description?: string) =>
       whatsappGroupService.createGroup(name, members, creatorId, description),
     joinGroup: (groupMetadata: any, invitedBy: string) =>
       whatsappGroupService.joinGroup(groupMetadata, invitedBy),

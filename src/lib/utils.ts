@@ -392,5 +392,76 @@ export const decryptFileFromUrlAndGetUrl = async ({
   }
 };
 
+// 🛠️ Utility function to clear corrupted IndexedDB data
+export const clearIndexedDBData = async (): Promise<void> => {
+  try {
+    const databases = ['signalstore', 'senderkeys', 'ChatStore'];
+    
+    for (const dbName of databases) {
+      try {
+        await new Promise<void>((resolve, reject) => {
+          const deleteRequest = indexedDB.deleteDatabase(dbName);
+          deleteRequest.onsuccess = () => {
+            console.log(`✅ Cleared IndexedDB: ${dbName}`);
+            resolve();
+          };
+          deleteRequest.onerror = () => {
+            console.warn(`⚠️ Failed to clear IndexedDB: ${dbName}`);
+            resolve(); // Don't fail completely if one DB fails
+          };
+          deleteRequest.onblocked = () => {
+            console.warn(`🚫 IndexedDB deletion blocked: ${dbName}`);
+            resolve();
+          };
+        });
+      } catch (error) {
+        console.warn(`Error clearing ${dbName}:`, error);
+      }
+    }
+    
+    // Also clear localStorage keys related to Signal
+    const keysToRemove = ['preKeyBundle', 'username', 'userId', 'token'];
+    keysToRemove.forEach(key => {
+      try {
+        localStorage.removeItem(key);
+        console.log(`✅ Cleared localStorage: ${key}`);
+      } catch (error) {
+        console.warn(`Failed to clear localStorage ${key}:`, error);
+      }
+    });
+    
+    console.log('🧹 IndexedDB and localStorage cleanup completed');
+  } catch (error) {
+    console.error('Failed to clear IndexedDB data:', error);
+    throw error;
+  }
+};
+
+// 🚀 Check if IndexedDB is available and working
+export const checkIndexedDBSupport = async (): Promise<boolean> => {
+  try {
+    if (!window.indexedDB) {
+      return false;
+    }
+    
+    // Try to open a test database
+    const testDB = await new Promise<boolean>((resolve) => {
+      const request = indexedDB.open('test-db', 1);
+      request.onsuccess = () => {
+        request.result.close();
+        indexedDB.deleteDatabase('test-db');
+        resolve(true);
+      };
+      request.onerror = () => resolve(false);
+      request.onblocked = () => resolve(false);
+    });
+    
+    return testDB;
+  } catch (error) {
+    console.error('IndexedDB support check failed:', error);
+    return false;
+  }
+};
+
 
 

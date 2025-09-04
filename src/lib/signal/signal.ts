@@ -32,9 +32,22 @@ export const Libinit=async()=>{
   .catch(console.error);
 }
 export const keyInitialize = async () => {
-  const store = new MySignalProtocolStore();
-  const libsignal: LibSignal = window.libsignal;
-  const KeyHelper = libsignal.KeyHelper;
+  try {
+    console.log('🔐 Initializing Signal Protocol keys...');
+    
+    // Check if browser supports IndexedDB
+    if (!window.indexedDB) {
+      throw new Error('Your browser does not support IndexedDB. Please use a modern browser.');
+    }
+
+    const store = new MySignalProtocolStore();
+    const libsignal: LibSignal = window.libsignal;
+    
+    if (!libsignal) {
+      throw new Error('Signal library not loaded. Please refresh the page.');
+    }
+    
+    const KeyHelper = libsignal.KeyHelper;
 
   // Generate registration ID
   const registrationId: number = KeyHelper.generateRegistrationId();
@@ -96,6 +109,22 @@ export const keyInitialize = async () => {
 
   console.log("Key Initialization Complete:", preKeyBundle);
   return preKeyBundle;
+  } catch (error) {
+    console.error('❌ Failed to initialize Signal Protocol keys:', error);
+    
+    // User-friendly error messages
+    if (error instanceof Error) {
+      if (error.message.includes('IndexedDB')) {
+        throw new Error('Unable to access browser storage. Please check your browser settings and try again.');
+      } else if (error.message.includes('Signal library')) {
+        throw new Error('Signal library failed to load. Please refresh the page and try again.');
+      } else {
+        throw new Error(`Key initialization failed: ${error.message}`);
+      }
+    }
+    
+    throw new Error('Unknown error occurred during key initialization. Please try again.');
+  }
 };
 
 

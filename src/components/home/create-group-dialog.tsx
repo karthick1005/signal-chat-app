@@ -109,10 +109,19 @@ const CreateGroupDialog: React.FC<CreateGroupDialogProps> = ({ children }) => {
         return;
       }
 
+      // Convert selectedMembers (IDs) to user objects with names
+      const selectedUserObjects = selectedMembers.map(userId => {
+        const user = allUsers.find(u => u.userId === userId);
+        return {
+          userId: userId,
+          name: user?.username || userId // Use username or fallback to userId
+        };
+      });
+
       // WhatsApp-style: Create group locally and announce to members
       const groupId = await whatsappServices.createGroup(
         groupName.trim(),
-        selectedMembers,
+        selectedUserObjects, // Send user objects instead of just IDs
         creatorId,
         groupDescription.trim() || undefined
       );

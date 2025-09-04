@@ -34,6 +34,16 @@ type ChatMeta = {
   avatar: string;
   isGroup?: boolean;
   groupKey?: string;
+  // Group-specific properties
+  members?: Array<{
+    userId: string;
+    name: string;
+    joinedAt: number;
+    isAdmin: boolean;
+  }>;
+  admins?: string[];
+  description?: string;
+  version?: number;
 };
 
 type ChatState = {
@@ -259,3 +269,6 @@ export const useConversationStore = create<ChatState>((set, get) => {
     },
   };
 });
+
+// Export types for use in components
+export type Conversation = ChatMeta;

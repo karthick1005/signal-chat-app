@@ -177,34 +177,101 @@ class SignalProtocolStore {
     private dbName = "SignalStore";
     private storeName = "SignalData";
   
-    public Direction = {
-      SENDING: 1,
-      RECEIVING: 2,
-    };
-  
-    constructor() {
-      this.initDB();
-    }
-  
-    private async initDB(): Promise<IDBDatabase> {
-      return new Promise((resolve, reject) => {
+  private dbPromise: Promise<IDBDatabase> | null = null;
+
+  public Direction = {
+    SENDING: 1,
+    RECEIVING: 2,
+  };
+
+  constructor() {
+    this.dbPromise = this.initDB().catch(error => {
+      console.error('Failed to initialize SignalProtocolStore database:', error);
+      throw error;
+    });
+  }  private async initDB(): Promise<IDBDatabase> {
+    return new Promise((resolve, reject) => {
+      try {
+        // Check if IndexedDB is available
+        if (!window.indexedDB) {
+          throw new Error('IndexedDB is not supported in this browser');
+        }
+
         const request = indexedDB.open(this.dbName, 1);
-  
+
         request.onupgradeneeded = (event: IDBVersionChangeEvent) => {
+          try {
+            const db = (event.target as IDBOpenDBRequest).result;
+            if (!db.objectStoreNames.contains(this.storeName)) {
+              db.createObjectStore(this.storeName);
+            }
+          } catch (error) {
+            console.error('Error during IndexedDB upgrade:', error);
+            reject(error);
+          }
+        };
+
+        request.onsuccess = () => {
+          try {
+            resolve(request.result);
+          } catch (error) {
+            console.error('Error during IndexedDB success:', error);
+            reject(error);
+          }
+        };
+
+        request.onerror = (event) => {
+          console.error('IndexedDB error:', request.error);
+          // Try to delete corrupted database and retry
+          this.deleteAndRetryDB().then(resolve).catch(reject);
+        };
+
+        request.onblocked = () => {
+          console.warn('IndexedDB blocked - another tab may be using the database');
+          reject(new Error('IndexedDB is blocked by another tab'));
+        };
+
+      } catch (error) {
+        console.error('Failed to initialize IndexedDB:', error);
+        reject(error);
+      }
+    });
+  }
+
+  private async deleteAndRetryDB(): Promise<IDBDatabase> {
+    console.log('Attempting to delete corrupted database and retry...');
+    return new Promise((resolve, reject) => {
+      const deleteRequest = indexedDB.deleteDatabase(this.dbName);
+      
+      deleteRequest.onsuccess = () => {
+        console.log('Corrupted database deleted, retrying...');
+        // Retry initialization
+        const retryRequest = indexedDB.open(this.dbName, 1);
+        
+        retryRequest.onupgradeneeded = (event: IDBVersionChangeEvent) => {
           const db = (event.target as IDBOpenDBRequest).result;
           if (!db.objectStoreNames.contains(this.storeName)) {
             db.createObjectStore(this.storeName);
           }
         };
-  
-        request.onsuccess = () => resolve(request.result);
-        request.onerror = () => reject(request.error);
-      });
+        
+        retryRequest.onsuccess = () => resolve(retryRequest.result);
+        retryRequest.onerror = () => reject(retryRequest.error);
+      };
+      
+      deleteRequest.onerror = () => {
+        console.error('Failed to delete corrupted database');
+        reject(deleteRequest.error);
+      };
+    });
+  }
+
+  private async getDB(): Promise<IDBDatabase> {
+    if (!this.dbPromise) {
+      this.dbPromise = this.initDB();
     }
-  
-    private async getDB(): Promise<IDBDatabase> {
-      return this.initDB();
-    }
+    return this.dbPromise;
+  }
   
     private async getItem(key: string): Promise<any> {
       const db = await this.getDB();

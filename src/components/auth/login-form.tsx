@@ -1,11 +1,12 @@
 'use client';
-import { CircleFadingPlus } from "lucide-react";
+import { CircleFadingPlus, RefreshCw } from "lucide-react";
 import type React from "react";
+import { useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { cn } from "@/lib/utils";
+import { cn, clearIndexedDBData, checkIndexedDBSupport } from "@/lib/utils";
 import { Card } from "../ui/card";
 import { keyInitialize } from "@/lib/signal/signal";
 import { useRouter } from "next/navigation";
@@ -16,7 +17,9 @@ export function LoginForm({
   ...props
 }: React.ComponentPropsWithoutRef<"div">) {
   const url = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-   const router = useRouter();
+  const router = useRouter();
+  const [hasIndexedDBError, setHasIndexedDBError] = useState(false);
+  const [isClearing, setIsClearing] = useState(false);
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const form = e.currentTarget;
@@ -45,10 +48,38 @@ export function LoginForm({
         router.push("/");
       } catch (error) {
         console.error("Error during login:", error);
-        toast.error("Login failed. Please try again.");
+        
+        // More specific error messages for IndexedDB issues
+        if (error instanceof Error) {
+          if (error.message.includes('browser storage') || error.message.includes('IndexedDB')) {
+            setHasIndexedDBError(true);
+            toast.error("Browser storage issue. Please try the 'Clear Data' button below.");
+          } else if (error.message.includes('Signal library')) {
+            toast.error("Security library failed to load. Please refresh the page.");
+          } else {
+            toast.error(error.message || "Login failed. Please try again.");
+          }
+        } else {
+          toast.error("Login failed. Please try again.");
+        }
       }
     }
   };
+
+  const handleClearData = async () => {
+    try {
+      setIsClearing(true);
+      await clearIndexedDBData();
+      setHasIndexedDBError(false);
+      toast.success("Data cleared successfully! Please try logging in again.");
+    } catch (error) {
+      console.error("Failed to clear data:", error);
+      toast.error("Failed to clear data. Please try refreshing the page.");
+    } finally {
+      setIsClearing(false);
+    }
+  };
+
   return (
     <Card
       className={cn(
@@ -123,6 +154,38 @@ export function LoginForm({
           </div>
         </div>
       </form>
+      
+      {hasIndexedDBError && (
+        <div className="border-t pt-4">
+          <div className="text-center mb-3">
+            <p className="text-sm text-muted-foreground mb-2">
+              Having trouble with browser storage?
+            </p>
+            <Button 
+              variant="outline" 
+              onClick={handleClearData}
+              disabled={isClearing}
+              className="w-full"
+            >
+              {isClearing ? (
+                <>
+                  <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
+                  Clearing Data...
+                </>
+              ) : (
+                <>
+                  <RefreshCw className="mr-2 h-4 w-4" />
+                  Clear Browser Data & Try Again
+                </>
+              )}
+            </Button>
+            <p className="text-xs text-muted-foreground mt-2">
+              This will clear your local encryption keys and chat history.
+            </p>
+          </div>
+        </div>
+      )}
+      
       <div className="text-balance text-center text-xs text-muted-foreground [&_a]:underline [&_a]:underline-offset-4 hover:[&_a]:text-primary  ">
         By clicking continue, you agree to our <a href="#">Terms of Service</a>{" "}
         and <a href="#">Privacy Policy</a>.

@@ -17,7 +17,13 @@ type GroupMembersDialogProps = {
 const GroupMembersDialog = ({
   selectedChat,
 }: GroupMembersDialogProps) => {
-  const users = []
+  const users = selectedChat.members || []
+  console.log("📋 Group Members Dialog - selectedChat:", {
+    chatId: selectedChat.chatId,
+    name: selectedChat.name,
+    members: selectedChat.members,
+    admins: selectedChat.admins
+  })
 
   return (
     <Dialog>
@@ -29,17 +35,14 @@ const GroupMembersDialog = ({
           <DialogTitle className="my-2">Current Members</DialogTitle>
           <DialogDescription>
             <div className="flex flex-col gap-3 ">
-              {users?.map((user) => (
+              {users?.length > 0 ? users.map((user) => (
                 <div
-                  key={user._id}
+                  key={user.userId}
                   className={`flex gap-3 items-center p-2 rounded`}
                 >
                   <Avatar className="overflow-visible">
-                    {user.isOnline && (
-                      <div className="absolute top-0 right-0 w-2 h-2 bg-green-500 rounded-full border-2 border-foreground" />
-                    )}
                     <AvatarImage
-                      src={user.image}
+                      src="/placeholder.png"
                       className="rounded-full object-cover"
                     />
                     <AvatarFallback>
@@ -50,15 +53,18 @@ const GroupMembersDialog = ({
                   <div className="w-full ">
                     <div className="flex items-center gap-2">
                       <h3 className="text-md font-medium">
-                        {user.name || user.email.split("@")[0]}
+                    
+                        {user.name || user.userId}
                       </h3>
-                      {user._id === selectedChat.admin && (
+                      {user.isAdmin && (
                         <Crown size={16} className="text-yellow-400" />
                       )}
                     </div>
                   </div>
                 </div>
-              ))}
+              )) : (
+                <p className="text-sm text-muted-foreground">No members found</p>
+              )}
             </div>
           </DialogDescription>
         </DialogHeader>

@@ -52,7 +52,7 @@ class WhatsAppGroupService {
    */
   async createGroup(
     name: string,
-    initialMembers: string[],
+    initialMembers: Array<{userId: string, name: string}> | string[],
     creatorId: string,
     description?: string
   ): Promise<string> {
@@ -71,17 +71,28 @@ class WhatsAppGroupService {
           // Creator is always the first member and admin
           {
             userId: creatorId,
-            name: 'You', // Will be updated with actual name
+            name: localStorage.getItem('username') || 'You',
             joinedAt: now,
             isAdmin: true
           },
-          // Add initial members
-          ...initialMembers.map(userId => ({
-            userId,
-            name: '', // Will be updated when they join
-            joinedAt: now,
-            isAdmin: false
-          }))
+          // Add initial members - handle both string[] and object[] formats
+          ...initialMembers.map(member => {
+            if (typeof member === 'string') {
+              return {
+                userId: member,
+                name: '', // Will be updated when they join
+                joinedAt: now,
+                isAdmin: false
+              };
+            } else {
+              return {
+                userId: member.userId,
+                name: member.name,
+                joinedAt: now,
+                isAdmin: false
+              };
+            }
+          })
         ],
         admins: [creatorId],
         version: 1,
@@ -103,7 +114,8 @@ class WhatsAppGroupService {
         
         // Distribute the Sender Key to all group members immediately
         console.log(`🔑 Distributing initial Sender Key to ${initialMembers.length} members`);
-        for (const memberId of initialMembers) {
+        for (const member of initialMembers) {
+          const memberId = typeof member === 'string' ? member : member.userId;
           if (this.socket) {
             this.socket.emit('direct_message', {
               receiverId: memberId,
