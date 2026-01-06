@@ -47,10 +47,7 @@ const MessageInput = () => {
   //       status: "sent",
   //     });
 
-  HandleSendMessage(selectedChat, JSON.stringify({
-           text: msgText,
-           messageType:"text"
-         }), socket,"direct_message")
+  HandleSendMessage(selectedChat, msgText, socket, "direct_message")
       // await sendTextMsg({
       //   content: msgText,
       //   conversation: selectedChat!._id,

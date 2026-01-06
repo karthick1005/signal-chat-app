@@ -15,7 +15,7 @@ const RightPanel = () => {
 
   const conversationName = selectedChat?.groupName || selectedChat?.name;
   const conversationImage = selectedChat?.groupImage || selectedChat?.image;
-
+  console.log("this is selected chat",selectedChat)
   return (
     <div className="w-full flex flex-col relative">
       {/* ✅ Always render the call logic */}

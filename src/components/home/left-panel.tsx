@@ -1,26 +1,29 @@
 "use client";
-import { ListFilter, Search } from "lucide-react";
+import { ListFilter, Search, Users } from "lucide-react";
 import { Input } from "../ui/input";
+import { Button } from "../ui/button";
 import ThemeSwitch from "./theme-switch";
 import Conversation from "./conversation";
 
 import UserListDialog from "./user-list-dialog";
+import CreateGroupDialog from "./create-group-dialog";
 
 import {  useEffect, useState } from "react";
 import { useConversationStore } from "@/store/chat-store";
 import chatStoreInstance from "@/lib/chatStoreInstance";
 const LeftPanel = () => {
-  const { chats } = useConversationStore();
+  const { chats, fetchChats } = useConversationStore();
   const [conversations, setconverstations] = useState<any[]>([]);
-useEffect(() => {
-      const fetchChats = async () => {
-      const allchats=await chatStoreInstance.getAllChats()
-    
-      setconverstations(allchats)
-      console.log("this is get all chats",allchats,Date.now())
-      }
-      fetchChats()
-    },[])
+
+  useEffect(() => {
+    const loadChats = async () => {
+      // Fetch both local chats and groups from the store
+      await fetchChats();
+      console.log("Chats loaded from store:", chats, Date.now());
+    };
+    loadChats();
+  }, [fetchChats]);
+
   useEffect(() => {
     setconverstations(chats);
   }, [chats]);
@@ -28,12 +31,12 @@ useEffect(() => {
 
   useEffect(() => {
     const conversationIds = conversations?.map(
-      (conversation) => conversation._id
+      (conversation) => conversation.chatId
     );
     if (
       selectedChat &&
       conversationIds &&
-      !conversationIds.includes(selectedChat._id)
+      !conversationIds.includes(selectedChat.chatId)
     ) {
       setSelectedChat(null);
     }
@@ -50,6 +53,11 @@ useEffect(() => {
 
           <div className="flex items-center gap-3">
             <UserListDialog />
+            <CreateGroupDialog>
+              <Button variant="ghost" size="sm">
+                <Users size={18} />
+              </Button>
+            </CreateGroupDialog>
             <ThemeSwitch />
           </div>
         </div>
@@ -74,7 +82,7 @@ useEffect(() => {
       <div className="my-3 flex flex-col gap-0 max-h-[80%] overflow-auto">
         {/* Conversations will go here*/}
         {conversations?.map((conversation) => (
-          <Conversation key={conversation._id} conversation={conversation} />
+          <Conversation key={conversation.chatId} conversation={conversation} />
         ))}
 
         {conversations?.length === 0 && (

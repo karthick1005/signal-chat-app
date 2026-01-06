@@ -1,8 +1,10 @@
 import { type ClassValue, clsx } from "clsx"
 import { twMerge } from "tailwind-merge"
 import ChatStore from "./signal/ChatStore";
-import { createSession, sendMessage } from "./signal/signal";
+import { createSession, sendMessage, encryptReaction, encryptGroupReaction, encryptGroupMessage } from "./signal/signal";
 import chatStoreInstance from "./chatStoreInstance";
+import { v4 as uuidv4 } from "uuid";
+import { whatsappSignalGroupService } from './whatsappSignalGroupServiceInstance';
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs))
@@ -230,32 +232,116 @@ interface HandleMessage{
 }
 export const HandleSendMessage:HandleMessage=async(selectedChat,msgText,socket,path,iscall=false)=>{
   try{
-     const recipientid = await chatStoreInstance.getRegistrationId(selectedChat?.chatId);
-        const cipher_text = await sendMessage(
-          recipientid,
-         msgText,
-          JSON.parse(localStorage.getItem("preKeyBundle") || "{}")
-            .registrationId,
-         selectedChat?.chatId,
-         iscall
-        //  "text"
-        );
-          socket?.emit(path, {
-          encryptedMessage: cipher_text,
-          receiverId: selectedChat?.chatId,
-          senderId: localStorage.getItem("userId"),
-          senderName: localStorage.getItem("username"),
-          // messageType: "text"
-        });
-        if(!iscall){
-    await chatStoreInstance.updateMessage(cipher_text.messageId, {
+    const isGroup = selectedChat?.isGroup;
+    
+    if (isGroup) {
+      console.log('📤 Handling WhatsApp-style group message...');
+      console.log('🔍 Debug selectedChat:', {
+        chatId: selectedChat.chatId,
+        isGroup: selectedChat.isGroup,
+        hasGroupKey: !!selectedChat.groupKey,
+        groupKeyLength: selectedChat.groupKey?.length,
+        groupKeyFirst10: selectedChat.groupKey?.substring(0, 10),
+        groupKeyIsString: typeof selectedChat.groupKey === 'string'
+      });
+      
+      // Use WhatsApp Signal Protocol group message service
+      const signalGroupService = whatsappSignalGroupService.initialize(socket);
+      
+      // Extract text if msgText is JSON
+      let textToSend = msgText;
+      try {
+        const parsed = JSON.parse(msgText);
+        textToSend = parsed.text || msgText;
+      } catch {
+        textToSend = msgText;
+      }
+
+      const currentUserId = localStorage.getItem("userId") || "0";
+      const currentUsername = localStorage.getItem("username") || "You";
+      
+      // Debug: Let's also check what's in the ChatStore for this group
+      const groupMetaFromStore = await chatStoreInstance.getGroupMeta(selectedChat.chatId);
+      console.log('🔍 Debug group from ChatStore:', {
+        found: !!groupMetaFromStore,
+        hasGroupKey: !!groupMetaFromStore?.groupKey,
+        keyLength: groupMetaFromStore?.groupKey?.length,
+        keyFirst10: groupMetaFromStore?.groupKey?.substring(0, 10),
+        keyIsString: typeof groupMetaFromStore?.groupKey === 'string'
+      });
+      
+      console.log(`🔑 Using WhatsApp Signal Protocol for group: ${selectedChat.chatId}`);
+      
+      // Send through WhatsApp Signal Protocol service (Sender Keys)
+      await signalGroupService.sendGroupMessage(
+        selectedChat.chatId,
+        textToSend,
+        'text'
+      );
+      
+      console.log('✅ WhatsApp Signal group message sent successfully');
+      
+    } else {
+      // Direct message - existing logic
+      const recipientid = await chatStoreInstance.getRegistrationId(selectedChat?.chatId);
+      if (!recipientid) {
+        throw new Error("Recipient not found");
+      }
+      const cipher_text = await sendMessage(
+        recipientid,
+       msgText,
+        JSON.parse(localStorage.getItem("preKeyBundle") || "{}")
+          .registrationId,
+       selectedChat?.chatId,
+       iscall
+      );
+      socket?.emit(path, {
+        encryptedMessage: cipher_text,
+        receiverId: selectedChat?.chatId,
+        senderId: localStorage.getItem("userId"),
+        senderName: localStorage.getItem("username"),
+      });
+      if(!iscall){
+        await chatStoreInstance.updateMessage(cipher_text.messageId, {
           status: "sent",
         });
       }
-      }catch (error: any) {
-        console.error("Error sending message:", error);
-        throw new Error(error.message || "Failed to send message");
+    }
+  }catch (error: any) {
+    console.error("❌ Error sending message:", error);
+    console.error("Error details:", {
+      selectedChat: selectedChat?.chatId,
+      isGroup: selectedChat?.isGroup,
+      hasGroupKey: !!selectedChat?.groupKey,
+      msgText: msgText?.substring(0, 50) + '...'
+    });
+    throw new Error(error.message || "Failed to send message");
+  }
+}
+
+export const HandleSendReaction = async (messageId: string, reaction: { userId: string; emoji: string }, selectedChat: any, socket: any, isGroup: boolean, groupKey?: string) => {
+  try {
+    let encryptedReaction;
+    if (isGroup && groupKey) {
+      encryptedReaction = await encryptGroupReaction(reaction, groupKey);
+    } else {
+      const recipientid = await chatStoreInstance.getRegistrationId(selectedChat?.chatId);
+      if (!recipientid) {
+        throw new Error("Recipient not found");
       }
+      encryptedReaction = await encryptReaction(reaction, recipientid, localStorage.getItem("userId")!);
+    }
+
+    socket?.emit("send_reaction", {
+      messageId,
+      encryptedReaction: JSON.stringify(encryptedReaction),
+      senderId: localStorage.getItem("userId"),
+      room: isGroup ? selectedChat.chatId : selectedChat.chatId,
+    });
+  } catch (error: any) {
+    console.error("Error sending reaction:", error);
+    throw new Error(error.message || "Failed to send reaction");
+  }
 }
 
 export const decryptFileFromUrlAndGetUrl = async ({
@@ -303,6 +389,77 @@ export const decryptFileFromUrlAndGetUrl = async ({
   } catch (error) {
     console.error("Decryption failed:", error);
     throw new Error("Decryption failed");
+  }
+};
+
+// 🛠️ Utility function to clear corrupted IndexedDB data
+export const clearIndexedDBData = async (): Promise<void> => {
+  try {
+    const databases = ['signalstore', 'senderkeys', 'ChatStore'];
+    
+    for (const dbName of databases) {
+      try {
+        await new Promise<void>((resolve, reject) => {
+          const deleteRequest = indexedDB.deleteDatabase(dbName);
+          deleteRequest.onsuccess = () => {
+            console.log(`✅ Cleared IndexedDB: ${dbName}`);
+            resolve();
+          };
+          deleteRequest.onerror = () => {
+            console.warn(`⚠️ Failed to clear IndexedDB: ${dbName}`);
+            resolve(); // Don't fail completely if one DB fails
+          };
+          deleteRequest.onblocked = () => {
+            console.warn(`🚫 IndexedDB deletion blocked: ${dbName}`);
+            resolve();
+          };
+        });
+      } catch (error) {
+        console.warn(`Error clearing ${dbName}:`, error);
+      }
+    }
+    
+    // Also clear localStorage keys related to Signal
+    const keysToRemove = ['preKeyBundle', 'username', 'userId', 'token'];
+    keysToRemove.forEach(key => {
+      try {
+        localStorage.removeItem(key);
+        console.log(`✅ Cleared localStorage: ${key}`);
+      } catch (error) {
+        console.warn(`Failed to clear localStorage ${key}:`, error);
+      }
+    });
+    
+    console.log('🧹 IndexedDB and localStorage cleanup completed');
+  } catch (error) {
+    console.error('Failed to clear IndexedDB data:', error);
+    throw error;
+  }
+};
+
+// 🚀 Check if IndexedDB is available and working
+export const checkIndexedDBSupport = async (): Promise<boolean> => {
+  try {
+    if (!window.indexedDB) {
+      return false;
+    }
+    
+    // Try to open a test database
+    const testDB = await new Promise<boolean>((resolve) => {
+      const request = indexedDB.open('test-db', 1);
+      request.onsuccess = () => {
+        request.result.close();
+        indexedDB.deleteDatabase('test-db');
+        resolve(true);
+      };
+      request.onerror = () => resolve(false);
+      request.onblocked = () => resolve(false);
+    });
+    
+    return testDB;
+  } catch (error) {
+    console.error('IndexedDB support check failed:', error);
+    return false;
   }
 };
 

@@ -469,7 +469,7 @@ export default class ChatStore {
 
   private async initDB(): Promise<IDBDatabase> {
     return new Promise((resolve, reject) => {
-      const request = indexedDB.open(this.dbName, 1);
+      const request = indexedDB.open(this.dbName, 2); // Increment version for new stores
       request.onupgradeneeded = (event) => {
         const db = (event.target as IDBOpenDBRequest).result;
         if (!db.objectStoreNames.contains(this.messageStore)) {
@@ -480,6 +480,14 @@ export default class ChatStore {
         }
         if (!db.objectStoreNames.contains(this.registrationMapStore)) {
           db.createObjectStore(this.registrationMapStore, { keyPath: "userId" });
+        }
+        // Add new stores for WhatsApp-like functionality
+        if (!db.objectStoreNames.contains("Groups")) {
+          db.createObjectStore("Groups", { keyPath: "groupId" });
+        }
+        if (!db.objectStoreNames.contains("Reactions")) {
+          const reactionStore = db.createObjectStore("Reactions", { keyPath: "id" });
+          reactionStore.createIndex("messageId", "messageId", { unique: false });
         }
       };
       request.onsuccess = () => resolve(request.result);
@@ -602,9 +610,11 @@ export default class ChatStore {
     const { ciphertext: lastMessageCiphertext, iv: lastMessageIV } = await this.encryptText(message.text);
 
     return new Promise((resolve, reject) => {
-      const tx = db.transaction([this.messageStore, this.chatMetaStore], "readwrite");
+      // Include Groups store in the transaction for group metadata lookup
+      const tx = db.transaction([this.messageStore, this.chatMetaStore, "Groups"], "readwrite");
       const messageStore = tx.objectStore(this.messageStore);
       const chatMetaStore = tx.objectStore(this.chatMetaStore);
+      const groupStore = tx.objectStore("Groups");
 
       const messageWithRead = {
         ...message,
@@ -619,33 +629,164 @@ export default class ChatStore {
         getMetaRequest.onsuccess = () => {
           let meta = getMetaRequest.result;
           if (!meta) {
-            meta = {
-              chatId: message.chatId,
+            // Check if this is a group chat by looking up group metadata
+            const groupRequest = groupStore.get(message.chatId);
+            
+            groupRequest.onsuccess = () => {
+              const groupMeta = groupRequest.result;
+              
+              if (groupMeta) {
+                // This is a group chat - preserve group properties
+                meta = {
+                  chatId: message.chatId,
+                  lastMessage: lastMessageCiphertext,
+                  lastMessageIV,
+                  lastTimestamp: message._creationTime,
+                  unreadCount: message.read ? 0 : 1,
+                  name: groupMeta.name,
+                  avatar: groupMeta.avatar || "/placeholder.svg",
+                  isGroup: true,
+                  groupKey: groupMeta.groupKey,
+                  members: groupMeta.members,
+                  admins: groupMeta.admins,
+                  description: groupMeta.description,
+                  version: groupMeta.version,
+                  isFromLocalStorage: true
+                };
+                console.log('💾 Creating group chat metadata:', { 
+                  name: meta.name, 
+                  isGroup: meta.isGroup, 
+                  hasGroupKey: !!meta.groupKey 
+                });
+              } else {
+                // Regular direct chat - try to get existing chat info first
+                const existingChatRequest = chatMetaStore.getAll();
+                existingChatRequest.onsuccess = () => {
+                  const allChats = existingChatRequest.result;
+                  const existingChat = allChats.find(chat => chat.chatId === message.chatId);
+                  
+                  let chatName = "Unknown";
+                  if (existingChat && existingChat.name) {
+                    // Use existing chat name (already correctly set during session creation)
+                    chatName = existingChat.name;
+                  } else {
+                    // Fallback logic for new chats
+                    const currentUserId = localStorage.getItem("userId");
+                    if (message.senderId.toString() === currentUserId) {
+                      // Current user is sending to someone else - chat name should be recipient's name
+                      // For now, we'll try to preserve existing name or use a placeholder
+                      chatName = "Contact"; // Fallback - ideally we'd look up the recipient's name
+                    } else {
+                      // Someone else is sending to current user - chat name should be sender's name
+                      chatName = message.sender.name || "Unknown";
+                    }
+                  }
+                  
+                  meta = {
+                    chatId: message.chatId,
+                    lastMessage: lastMessageCiphertext,
+                    lastMessageIV,
+                    lastTimestamp: message._creationTime,
+                    unreadCount: message.read ? 0 : 1,
+                    name: chatName,
+                    avatar: "/placeholder.svg",
+                  };
+                  console.log('💾 Creating direct chat metadata:', { 
+                    name: meta.name, 
+                    isGroup: false,
+                    chatId: message.chatId,
+                    senderId: message.senderId,
+                    currentUserId: localStorage.getItem("userId"),
+                    usedExistingName: !!existingChat
+                  });
+                  
+                  chatMetaStore.put(meta);
+                };
+              }
+              
+              if (groupMeta) {
+                chatMetaStore.put(meta);
+              }
+            };
+            
+            groupRequest.onerror = () => {
+              console.warn('⚠️ Group lookup failed, treating as direct chat');
+              
+              // Try to get existing chat info first
+              const existingChatRequest = chatMetaStore.getAll();
+              existingChatRequest.onsuccess = () => {
+                const allChats = existingChatRequest.result;
+                const existingChat = allChats.find(chat => chat.chatId === message.chatId);
+                
+                let chatName = "Unknown";
+                if (existingChat && existingChat.name) {
+                  // Use existing chat name
+                  chatName = existingChat.name;
+                } else {
+                  // Fallback logic for new chats
+                  const currentUserId = localStorage.getItem("userId");
+                  if (message.senderId.toString() === currentUserId) {
+                    chatName = "Contact";
+                  } else {
+                    chatName = message.sender.name || "Unknown";
+                  }
+                }
+                
+                meta = {
+                  chatId: message.chatId,
+                  lastMessage: lastMessageCiphertext,
+                  lastMessageIV,
+                  lastTimestamp: message._creationTime,
+                  unreadCount: message.read ? 0 : 1,
+                  name: chatName,
+                  avatar: "/placeholder.svg",
+                };
+                chatMetaStore.put(meta);
+              };
+            };
+            
+          } else {
+            // Update existing metadata - preserve existing properties (especially group properties)
+            const updatedMeta = {
+              ...meta, // Preserve all existing properties including isGroup, groupKey, etc.
               lastMessage: lastMessageCiphertext,
               lastMessageIV,
               lastTimestamp: message._creationTime,
-              unreadCount: message.read ? 0 : 1,
-              name: message.sender.name || "Unknown",
-              avatar: "/placeholder.svg",
             };
-          } else {
-            meta.lastMessage = lastMessageCiphertext;
-            meta.lastMessageIV = lastMessageIV;
-            meta.lastTimestamp = message._creationTime;
+            
             if (!message.read) {
-              meta.unreadCount = (meta.unreadCount || 0) + 1;
+              updatedMeta.unreadCount = (meta.unreadCount || 0) + 1;
             }
+            
+            // Only update name if it's not a group (groups should keep their group name)
+            // For direct chats, we should NEVER change the name based on who sends messages
+            // The chat name represents the OTHER person in the conversation, not the current sender
+            // if (!meta.isGroup && meta.name !== message.sender.name) {
+            //   updatedMeta.name = message.sender.name;
+            // }
+            
+            // ✅ FIXED: Don't update direct chat names based on message senders
+            // Direct chat names should remain constant and represent the other participant
+            
+            console.log('💾 Updating existing chat metadata:', { 
+              name: updatedMeta.name, 
+              isGroup: !!updatedMeta.isGroup, 
+              hasGroupKey: !!updatedMeta.groupKey,
+              preservedProperties: Object.keys(updatedMeta)
+            });
+            
+            chatMetaStore.put(updatedMeta);
           }
-          chatMetaStore.put(meta);
-          tx.oncomplete = () => {
-            this.notify(); // 🔔 notify after write
-            resolve();
-          };
-          tx.onerror = () => reject(tx.error);
         };
         getMetaRequest.onerror = () => reject(getMetaRequest.error);
       };
       addRequest.onerror = () => reject(addRequest.error);
+      
+      tx.oncomplete = () => {
+        this.notify(); // 🔔 notify after write
+        resolve();
+      };
+      tx.onerror = () => reject(tx.error);
     });
   }
 
@@ -832,5 +973,189 @@ export default class ChatStore {
       };
       getRequest.onerror = () => reject(getRequest.error);
     });
+  }
+
+  // WhatsApp-like Group Management (Local Device Storage Only)
+  async saveGroupMeta(groupId: string, metadata: any): Promise<void> {
+    const db = await this.getDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction("Groups", "readwrite");
+      const store = tx.objectStore("Groups");
+      const groupData = {
+        groupId,
+        ...metadata,
+        lastUpdated: Date.now(),
+        // WhatsApp-style: groups exist only on devices that are part of them
+        // No server-side group database, just local device storage
+        deviceOnly: true, 
+        version: metadata.version || 1 // For conflict resolution when receiving updates
+      };
+      const putRequest = store.put(groupData);
+      putRequest.onsuccess = () => resolve();
+      putRequest.onerror = () => reject(putRequest.error);
+    });
+  }
+
+  async getGroupMeta(groupId: string): Promise<any | null> {
+    const db = await this.getDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction("Groups", "readonly");
+      const store = tx.objectStore("Groups");
+      const getRequest = store.get(groupId);
+      getRequest.onsuccess = () => resolve(getRequest.result || null);
+      getRequest.onerror = () => reject(getRequest.error);
+    });
+  }
+
+  async getAllGroups(): Promise<any[]> {
+    const db = await this.getDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction("Groups", "readonly");
+      const store = tx.objectStore("Groups");
+      const getAllRequest = store.getAll();
+      getAllRequest.onsuccess = () => resolve(getAllRequest.result || []);
+      getAllRequest.onerror = () => reject(getAllRequest.error);
+    });
+  }
+
+  async deleteGroup(groupId: string): Promise<void> {
+    const db = await this.getDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction("Groups", "readwrite");
+      const store = tx.objectStore("Groups");
+      const deleteRequest = store.delete(groupId);
+      deleteRequest.onsuccess = () => resolve();
+      deleteRequest.onerror = () => reject(deleteRequest.error);
+    });
+  }
+
+  async updateGroupSyncStatus(groupId: string, status: 'local' | 'syncing' | 'synced'): Promise<void> {
+    // In WhatsApp-like system, groups don't have traditional sync status
+    // Instead they have version numbers for conflict resolution
+    const group = await this.getGroupMeta(groupId);
+    if (group) {
+      group.lastUpdated = Date.now();
+      // Version increments when group metadata changes (name, members, etc.)
+      if (status === 'synced') {
+        group.version = (group.version || 1) + 1;
+      }
+      await this.saveGroupMeta(groupId, group);
+    }
+  }
+
+  // WhatsApp-style: Get groups that need to announce their existence to new members
+  async getGroupsForAnnouncement(): Promise<any[]> {
+    const groups = await this.getAllGroups();
+    return groups.filter(g => g.isAdmin || g.canAnnounce);
+  }
+
+  // WhatsApp-like Reaction Management
+  async saveReaction(messageId: string, userId: string, emoji: string, timestamp?: number): Promise<void> {
+    const db = await this.getDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction("Reactions", "readwrite");
+      const store = tx.objectStore("Reactions");
+      const reactionId = `${messageId}_${userId}`;
+      const reactionData = {
+        id: reactionId,
+        messageId,
+        userId,
+        emoji,
+        timestamp: timestamp || Date.now(),
+        syncStatus: 'local'
+      };
+      const putRequest = store.put(reactionData);
+      putRequest.onsuccess = () => resolve();
+      putRequest.onerror = () => reject(putRequest.error);
+    });
+  }
+
+  async removeReaction(messageId: string, userId: string): Promise<void> {
+    const db = await this.getDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction("Reactions", "readwrite");
+      const store = tx.objectStore("Reactions");
+      const reactionId = `${messageId}_${userId}`;
+      const deleteRequest = store.delete(reactionId);
+      deleteRequest.onsuccess = () => resolve();
+      deleteRequest.onerror = () => reject(deleteRequest.error);
+    });
+  }
+
+  async getReactionsForMessage(messageId: string): Promise<any[]> {
+    const db = await this.getDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction("Reactions", "readonly");
+      const store = tx.objectStore("Reactions");
+      const index = store.index("messageId");
+      const getAllRequest = index.getAll(messageId);
+      getAllRequest.onsuccess = () => resolve(getAllRequest.result || []);
+      getAllRequest.onerror = () => reject(getAllRequest.error);
+    });
+  }
+
+  async getAllPendingReactions(): Promise<any[]> {
+    const allReactions = await this.getAllReactions();
+    return allReactions.filter(r => r.syncStatus === 'local');
+  }
+
+  async getAllReactions(): Promise<any[]> {
+    const db = await this.getDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction("Reactions", "readonly");
+      const store = tx.objectStore("Reactions");
+      const getAllRequest = store.getAll();
+      getAllRequest.onsuccess = () => resolve(getAllRequest.result || []);
+      getAllRequest.onerror = () => reject(getAllRequest.error);
+    });
+  }
+
+  async updateReactionSyncStatus(messageId: string, userId: string, status: 'local' | 'syncing' | 'synced'): Promise<void> {
+    const db = await this.getDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction("Reactions", "readwrite");
+      const store = tx.objectStore("Reactions");
+      const reactionId = `${messageId}_${userId}`;
+      const getRequest = store.get(reactionId);
+      getRequest.onsuccess = () => {
+        const reaction = getRequest.result;
+        if (reaction) {
+          reaction.syncStatus = status;
+          reaction.lastSynced = status === 'synced' ? Date.now() : reaction.lastSynced;
+          const putRequest = store.put(reaction);
+          putRequest.onsuccess = () => resolve();
+          putRequest.onerror = () => reject(putRequest.error);
+        } else {
+          resolve();
+        }
+      };
+      getRequest.onerror = () => reject(getRequest.error);
+    });
+  }
+
+  // Background sync helpers - WhatsApp style
+  async getUnsyncedGroups(): Promise<any[]> {
+    // In WhatsApp, there are no "unsynced" groups per se
+    // Instead, we track groups that have pending metadata changes
+    const groups = await this.getAllGroups();
+    return groups.filter(g => g.hasPendingChanges || g.needsAnnouncement);
+  }
+
+  async cleanupOldData(maxAge: number = 30 * 24 * 60 * 60 * 1000): Promise<void> {
+    const cutoff = Date.now() - maxAge;
+    const db = await this.getDB();
+    
+    // Clean up old reactions
+    const tx = db.transaction("Reactions", "readwrite");
+    const store = tx.objectStore("Reactions");
+    const getAllRequest = store.getAll();
+    getAllRequest.onsuccess = () => {
+      const reactions = getAllRequest.result;
+      reactions.forEach(reaction => {
+        if (reaction.timestamp < cutoff && reaction.syncStatus === 'synced') {
+          store.delete(reaction.id);
+        }
+      });
+    };
   }
 }

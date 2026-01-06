@@ -6,7 +6,15 @@ import { ImageIcon, Users, VideoIcon } from "lucide-react"
 import { useConversationStore } from "@/store/chat-store"
 
 const Conversation = React.memo(({ conversation }: { conversation: any }) => {
-  console.log(conversation, "this is conversation in conversation component")
+  console.log("📋 Conversation component - conversation object:", {
+    name: conversation.name,
+    chatId: conversation.chatId,
+    isGroup: conversation.isGroup,
+    hasGroupKey: !!conversation.groupKey,
+    groupKeyLength: conversation.groupKey?.length,
+    fullObject: conversation
+  });
+  
   const conversationImage = conversation.groupImage || conversation.image
   const conversationName = conversation.groupName || conversation.name
   const lastMessage = conversation.lastMessage
@@ -15,7 +23,7 @@ const Conversation = React.memo(({ conversation }: { conversation: any }) => {
   const me= getMe()
   const { setSelectedChat, selectedChat } =
     useConversationStore()
-  const activeBgClass = selectedChat?._id === conversation._id
+  const activeBgClass = selectedChat?.chatId === conversation.chatId
 
   return (
     <>
@@ -24,6 +32,10 @@ const Conversation = React.memo(({ conversation }: { conversation: any }) => {
 					${activeBgClass ? "bg-gray-tertiary" : ""}
 				`}
         onClick={() => setSelectedChat(conversation)}
+        onKeyDown={(e) => { if (e.key === 'Enter') setSelectedChat(conversation); }}
+        tabIndex={0}
+        role="button"
+        aria-label={`Select conversation with ${conversationName}`}
       >
         <Avatar className="border border-gray-900 overflow-visible relative">
           {conversation.isOnline && (
